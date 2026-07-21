@@ -56,6 +56,17 @@ def init_db():
         )
     """)
 
+    # Migrasi kolom baru -- aman dijalankan berkali-kali, error "duplicate column" diabaikan
+    for kolom, tipe in [
+        ("region", "TEXT"),
+        ("status_operasional", "TEXT DEFAULT 'Aktif'"),
+        ("tujuan_zona_id", "TEXT"),
+    ]:
+        try:
+            cur.execute(f"ALTER TABLE armada ADD COLUMN {kolom} {tipe}")
+        except sqlite3.OperationalError:
+            pass  # kolom sudah ada dari migrasi sebelumnya
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS log_posisi (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -311,13 +322,88 @@ USERS_HTML = """<!DOCTYPE html>
 <div class="panel">
   <h6>Daftar user</h6>
   <table>
-    <thead><tr><th>Username</th><th>Role</th><th>Armada</th></tr></thead>
+    <thead><tr><th>Username</th><th>Role</th><th>Armada</th><th>Aksi</th></tr></thead>
     <tbody>
     {% for u in users %}
-      <tr><td>{{ u.username }}</td><td>{{ u.role }}</td><td>{{ u.armada_id or '-' }}</td></tr>
+      <tr>
+        <td>{{ u.username }}</td>
+        <td>{{ u.role }}</td>
+        <td>{{ u.armada_id or '-' }}</td>
+        <td>
+          <a href="/users/edit/{{ u.id }}" style="margin-right:10px;">Edit</a>
+          {% if u.username != current_username %}
+          <form method="POST" action="/users/delete/{{ u.id }}" style="display:inline;" onsubmit="return confirm('Yakin mau hapus user {{ u.username }}?');">
+            <button type="submit" style="background:none; border:none; color:#E08A6B; padding:0; cursor:pointer; text-decoration:underline;">Hapus</button>
+          </form>
+          {% else %}
+          <span style="color:#8A8276; font-size:11px;">(akun sendiri)</span>
+          {% endif %}
+        </td>
+      </tr>
     {% endfor %}
     </tbody>
   </table>
+</div>
+
+<script>
+function toggleArmada() {
+  const role = document.getElementById('roleSelect').value;
+  document.getElementById('armadaField').style.display = role === 'supir' ? 'block' : 'none';
+}
+toggleArmada();
+</script>
+</body>
+</html>"""
+
+
+EDIT_USER_HTML = """<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Edit User - Fleet Tracker</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+<style>
+  body { margin:0; background:#1C1A17; color:#F3EFE6; font-family: -apple-system, "Segoe UI", sans-serif; padding:24px; }
+  .panel { background:#252220; border:1px solid #423D36; border-radius:8px; padding:20px; max-width:500px; }
+  .form-control, .form-select { background:#2D2A25; border:1px solid #423D36; color:#F3EFE6; }
+  .form-control:focus, .form-select:focus { background:#2D2A25; color:#F3EFE6; border-color:#FF6A1A; box-shadow:none; }
+  .btn-primary { background:#FF6A1A; border-color:#FF6A1A; }
+  a { color:#FF6A1A; }
+</style>
+</head>
+<body>
+<p><a href="/users">&larr; Kembali ke Kelola User</a></p>
+<h4>Edit User: {{ u.username }}</h4>
+
+{% with messages = get_flashed_messages() %}
+  {% if messages %}<div class="alert alert-info py-2">{{ messages[0] }}</div>{% endif %}
+{% endwith %}
+
+<div class="panel">
+  <form method="POST">
+    <div class="mb-2">
+      <label class="form-label">Username</label>
+      <input type="text" name="username" class="form-control" value="{{ u.username }}" required>
+    </div>
+    <div class="mb-2">
+      <label class="form-label">Password baru (kosongkan kalau tidak ingin ganti)</label>
+      <input type="text" name="password" class="form-control" placeholder="Biarkan kosong = tidak berubah">
+    </div>
+    <div class="mb-2">
+      <label class="form-label">Role</label>
+      <select name="role" class="form-select" id="roleSelect" onchange="toggleArmada()">
+        <option value="admin" {% if u.role == 'admin' %}selected{% endif %}>Admin</option>
+        <option value="owner" {% if u.role == 'owner' %}selected{% endif %}>Owner</option>
+        <option value="supir" {% if u.role == 'supir' %}selected{% endif %}>Supir</option>
+      </select>
+    </div>
+    <div class="mb-2" id="armadaField">
+      <label class="form-label">Armada ID (khusus role supir)</label>
+      <input type="text" name="armada_id" class="form-control" value="{{ u.armada_id or '' }}">
+    </div>
+    <button type="submit" class="btn btn-primary">Simpan Perubahan</button>
+  </form>
 </div>
 
 <script>
@@ -337,7 +423,7 @@ toggleArmada();
 def users_page():
     db = get_db()
     users = db.execute("SELECT * FROM users ORDER BY id").fetchall()
-    return render_template_string(USERS_HTML, users=users)
+    return render_template_string(USERS_HTML, users=users, current_username=current_user.username)
 
 
 @app.route("/users/create", methods=["POST"])
@@ -367,7 +453,74 @@ def users_create():
     return redirect(url_for("users_page"))
 
 
+@app.route("/users/edit/<int:user_id>", methods=["GET", "POST"])
+@login_required
+@admin_required
+def users_edit(user_id):
+    db = get_db()
 
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        role = request.form.get("role", "supir")
+        armada_id = request.form.get("armada_id", "").strip() or None
+
+        if not username:
+            flash("Username wajib diisi.")
+            return redirect(url_for("users_edit", user_id=user_id))
+
+        try:
+            if password:
+                db.execute(
+                    "UPDATE users SET username=?, password_hash=?, role=?, armada_id=? WHERE id=?",
+                    (username, generate_password_hash(password), role, armada_id, user_id),
+                )
+            else:
+                db.execute(
+                    "UPDATE users SET username=?, role=?, armada_id=? WHERE id=?",
+                    (username, role, armada_id, user_id),
+                )
+            db.commit()
+            flash(f"User '{username}' berhasil diperbarui.")
+        except sqlite3.IntegrityError:
+            flash(f"Username '{username}' sudah dipakai user lain.")
+            return redirect(url_for("users_edit", user_id=user_id))
+
+        return redirect(url_for("users_page"))
+
+    row = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    if row is None:
+        flash("User tidak ditemukan.")
+        return redirect(url_for("users_page"))
+
+    return render_template_string(EDIT_USER_HTML, u=row)
+
+
+@app.route("/users/delete/<int:user_id>", methods=["POST"])
+@login_required
+@admin_required
+def users_delete(user_id):
+    db = get_db()
+
+    target = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    if target is None:
+        flash("User tidak ditemukan.")
+        return redirect(url_for("users_page"))
+
+    if target["username"] == current_user.username:
+        flash("Tidak bisa menghapus akun sendiri yang sedang login.")
+        return redirect(url_for("users_page"))
+
+    if target["role"] == "admin":
+        admin_count = db.execute("SELECT COUNT(*) as c FROM users WHERE role = 'admin'").fetchone()["c"]
+        if admin_count <= 1:
+            flash("Tidak bisa menghapus admin terakhir yang tersisa.")
+            return redirect(url_for("users_page"))
+
+    db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    db.commit()
+    flash(f"User '{target['username']}' berhasil dihapus.")
+    return redirect(url_for("users_page"))
 
 @app.route("/api/track", methods=["GET", "POST"])
 def track():
@@ -436,18 +589,272 @@ def track():
     })
 
 
+# ---------- Kelola Armada (region, status, generator link GPS) ----------
+
+ARMADA_HTML = """<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kelola Armada - Fleet Tracker</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+<style>
+  body { margin:0; background:#1C1A17; color:#F3EFE6; font-family: -apple-system, "Segoe UI", sans-serif; padding:24px; }
+  .panel { background:#252220; border:1px solid #423D36; border-radius:8px; padding:20px; max-width:900px; margin-bottom:20px; }
+  .form-control, .form-select { background:#2D2A25; border:1px solid #423D36; color:#F3EFE6; }
+  .form-control:focus, .form-select:focus { background:#2D2A25; color:#F3EFE6; border-color:#FF6A1A; box-shadow:none; }
+  .btn-primary { background:#FF6A1A; border-color:#FF6A1A; }
+  table { width:100%; font-size:13px; }
+  th, td { padding:8px; border-bottom:1px solid #423D36; vertical-align:middle; }
+  a { color:#FF6A1A; }
+  .link-box {
+    background:#1C1A17; border:1px solid #423D36; border-radius:4px; padding:6px 8px;
+    font-size:11px; font-family:monospace; color:#8A8276; word-break:break-all;
+  }
+  .copy-btn { font-size:11px; padding:2px 8px; }
+</style>
+</head>
+<body>
+<p><a href="/">&larr; Kembali ke dashboard</a></p>
+<h4>Kelola Armada</h4>
+
+{% with messages = get_flashed_messages() %}
+  {% if messages %}<div class="alert alert-info py-2">{{ messages[0] }}</div>{% endif %}
+{% endwith %}
+
+<div class="panel">
+  <h6>Daftar / registrasi armada baru</h6>
+  <p style="font-size:12px; color:#8A8276;">
+    Registrasi armada di sini dulu (sebelum device fisik mulai kirim data) supaya region dan link GPS-nya siap dari awal.
+    Kalau armada sudah pernah kirim data lewat <code>/api/track</code>, dia otomatis muncul juga di daftar bawah walau belum diregistrasi manual.
+  </p>
+  <form method="POST" action="/armada/create" class="row g-2">
+    <div class="col-md-3">
+      <input type="text" name="armada_id" class="form-control" placeholder="Armada ID, cth: ARM-001" required>
+    </div>
+    <div class="col-md-3">
+      <input type="text" name="nama" class="form-control" placeholder="Nama/keterangan">
+    </div>
+    <div class="col-md-2">
+      <input type="text" name="nopol" class="form-control" placeholder="Nopol">
+    </div>
+    <div class="col-md-2">
+      <select name="region" class="form-select">
+        <option value="Jawa">Jawa</option>
+        <option value="Sumatra">Sumatra</option>
+        <option value="">Belum ditentukan</option>
+      </select>
+    </div>
+    <div class="col-md-2">
+      <button type="submit" class="btn btn-primary w-100">Tambah</button>
+    </div>
+  </form>
+</div>
+
+{% for region_name, group in grouped.items() %}
+<div class="panel">
+  <h6>{{ region_name }}</h6>
+  <table>
+    <thead><tr>
+      <th>Armada</th><th>Nopol</th><th>Status</th><th>Tujuan</th><th>Link GPS (untuk GPSLogger/ESP32)</th><th>Aksi</th>
+    </tr></thead>
+    <tbody>
+    {% for a in group %}
+      <tr>
+        <td>{{ a.armada_id }}<br><span style="color:#8A8276; font-size:11px;">{{ a.nama or '' }}</span></td>
+        <td>{{ a.nopol or '-' }}</td>
+        <td>
+          <span style="padding:2px 8px; border-radius:4px; font-size:11px; background:
+            {% if a.status_operasional == 'Reparasi' %}rgba(224,138,107,0.15); color:#E08A6B
+            {% elif a.status_operasional == 'Istirahat' %}rgba(227,172,68,0.15); color:#E3AC44
+            {% elif a.status_operasional == 'Siap Trip Baru' %}rgba(107,182,137,0.15); color:#6BB689
+            {% else %}rgba(107,182,137,0.15); color:#6BB689{% endif %};">
+            {{ a.status_operasional or 'Aktif' }}
+          </span>
+        </td>
+        <td>{{ a.tujuan_nama or '-' }}</td>
+        <td>
+          <div class="link-box" id="link_{{ a.armada_id }}">{{ base_url }}api/track?armada_id={{ a.armada_id }}&amp;lat=%LAT&amp;lon=%LON&amp;speed=%SPD&amp;time=%TIME</div>
+          <button class="btn btn-outline-light copy-btn mt-1" onclick="copyLink('{{ a.armada_id }}')">Copy</button>
+        </td>
+        <td><a href="/armada/edit/{{ a.armada_id }}">Edit</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endfor %}
+
+<script>
+function copyLink(armadaId) {
+  const text = document.getElementById('link_' + armadaId).textContent;
+  navigator.clipboard.writeText(text);
+  alert('Link disalin untuk ' + armadaId);
+}
+</script>
+</body>
+</html>"""
+
+
+EDIT_ARMADA_HTML = """<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Edit Armada - Fleet Tracker</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+<style>
+  body { margin:0; background:#1C1A17; color:#F3EFE6; font-family: -apple-system, "Segoe UI", sans-serif; padding:24px; }
+  .panel { background:#252220; border:1px solid #423D36; border-radius:8px; padding:20px; max-width:500px; }
+  .form-control, .form-select { background:#2D2A25; border:1px solid #423D36; color:#F3EFE6; }
+  .form-control:focus, .form-select:focus { background:#2D2A25; color:#F3EFE6; border-color:#FF6A1A; box-shadow:none; }
+  .btn-primary { background:#FF6A1A; border-color:#FF6A1A; }
+  a { color:#FF6A1A; }
+</style>
+</head>
+<body>
+<p><a href="/armada">&larr; Kembali ke Kelola Armada</a></p>
+<h4>Edit Armada: {{ a.armada_id }}</h4>
+
+<div class="panel">
+  <form method="POST">
+    <div class="mb-2">
+      <label class="form-label">Nama/keterangan</label>
+      <input type="text" name="nama" class="form-control" value="{{ a.nama or '' }}">
+    </div>
+    <div class="mb-2">
+      <label class="form-label">Nomor polisi</label>
+      <input type="text" name="nopol" class="form-control" value="{{ a.nopol or '' }}">
+    </div>
+    <div class="mb-2">
+      <label class="form-label">Region</label>
+      <select name="region" class="form-select">
+        <option value="Jawa" {% if a.region == 'Jawa' %}selected{% endif %}>Jawa</option>
+        <option value="Sumatra" {% if a.region == 'Sumatra' %}selected{% endif %}>Sumatra</option>
+        <option value="" {% if not a.region %}selected{% endif %}>Belum ditentukan</option>
+      </select>
+    </div>
+    <div class="mb-2">
+      <label class="form-label">Status operasional</label>
+      <select name="status_operasional" class="form-select">
+        <option value="Aktif" {% if a.status_operasional == 'Aktif' %}selected{% endif %}>Aktif</option>
+        <option value="Reparasi" {% if a.status_operasional == 'Reparasi' %}selected{% endif %}>Reparasi</option>
+        <option value="Istirahat" {% if a.status_operasional == 'Istirahat' %}selected{% endif %}>Istirahat</option>
+        <option value="Siap Trip Baru" {% if a.status_operasional == 'Siap Trip Baru' %}selected{% endif %}>Siap Trip Baru</option>
+      </select>
+    </div>
+    <div class="mb-2">
+      <label class="form-label">Tujuan (gudang/zona) -- untuk tombol rute Google Maps</label>
+      <select name="tujuan_zona_id" class="form-select">
+        <option value="">Tidak ada tujuan aktif</option>
+        {% for z in zonas %}
+        <option value="{{ z.zona_id }}" {% if a.tujuan_zona_id == z.zona_id %}selected{% endif %}>{{ z.nama }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="btn btn-primary">Simpan Perubahan</button>
+  </form>
+</div>
+</body>
+</html>"""
+
+
+@app.route("/armada")
+@login_required
+@admin_required
+def armada_page():
+    db = get_db()
+    rows = db.execute("""
+        SELECT a.*, z.nama as tujuan_nama FROM armada a
+        LEFT JOIN zona z ON a.tujuan_zona_id = z.zona_id
+        ORDER BY a.region, a.armada_id
+    """).fetchall()
+
+    grouped = {}
+    for r in rows:
+        region = r["region"] or "Belum ditentukan"
+        grouped.setdefault(region, []).append(r)
+
+    base_url = request.host_url
+
+    return render_template_string(ARMADA_HTML, grouped=grouped, base_url=base_url)
+
+
+@app.route("/armada/create", methods=["POST"])
+@login_required
+@admin_required
+def armada_create():
+    armada_id = request.form.get("armada_id", "").strip()
+    nama = request.form.get("nama", "").strip() or None
+    nopol = request.form.get("nopol", "").strip() or None
+    region = request.form.get("region", "").strip() or None
+
+    if not armada_id:
+        flash("Armada ID wajib diisi.")
+        return redirect(url_for("armada_page"))
+
+    db = get_db()
+    existing = db.execute("SELECT armada_id FROM armada WHERE armada_id = ?", (armada_id,)).fetchone()
+    if existing:
+        flash(f"Armada '{armada_id}' sudah terdaftar.")
+        return redirect(url_for("armada_page"))
+
+    db.execute(
+        "INSERT INTO armada (armada_id, nama, nopol, region, status_operasional) VALUES (?, ?, ?, ?, 'Aktif')",
+        (armada_id, nama, nopol, region),
+    )
+    db.commit()
+    flash(f"Armada '{armada_id}' berhasil didaftarkan.")
+    return redirect(url_for("armada_page"))
+
+
+@app.route("/armada/edit/<armada_id>", methods=["GET", "POST"])
+@login_required
+@admin_required
+def armada_edit(armada_id):
+    db = get_db()
+
+    if request.method == "POST":
+        nama = request.form.get("nama", "").strip() or None
+        nopol = request.form.get("nopol", "").strip() or None
+        region = request.form.get("region", "").strip() or None
+        status_operasional = request.form.get("status_operasional", "Aktif")
+        tujuan_zona_id = request.form.get("tujuan_zona_id", "").strip() or None
+
+        db.execute(
+            """UPDATE armada SET nama=?, nopol=?, region=?, status_operasional=?, tujuan_zona_id=?
+               WHERE armada_id=?""",
+            (nama, nopol, region, status_operasional, tujuan_zona_id, armada_id),
+        )
+        db.commit()
+        flash(f"Armada '{armada_id}' berhasil diperbarui.")
+        return redirect(url_for("armada_page"))
+
+    a = db.execute("SELECT * FROM armada WHERE armada_id = ?", (armada_id,)).fetchone()
+    if a is None:
+        flash("Armada tidak ditemukan.")
+        return redirect(url_for("armada_page"))
+
+    zonas = db.execute("SELECT * FROM zona ORDER BY nama").fetchall()
+    return render_template_string(EDIT_ARMADA_HTML, a=a, zonas=zonas)
+
+
 # ---------- Routes: data buat dashboard ----------
 
 @app.route("/api/armada")
 @login_required
 def api_armada():
     db = get_db()
+    query = """
+        SELECT a.*, z.nama as tujuan_nama, z.lat as tujuan_lat, z.lon as tujuan_lon
+        FROM armada a
+        LEFT JOIN zona z ON a.tujuan_zona_id = z.zona_id
+    """
     if current_user.role == "supir" and current_user.armada_id:
-        rows = db.execute(
-            "SELECT * FROM armada WHERE armada_id = ?", (current_user.armada_id,)
-        ).fetchall()
+        rows = db.execute(query + " WHERE a.armada_id = ?", (current_user.armada_id,)).fetchall()
     else:
-        rows = db.execute("SELECT * FROM armada").fetchall()
+        rows = db.execute(query).fetchall()
     return jsonify([dict(r) for r in rows])
 
 
@@ -635,6 +1042,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <div class="nav-link"><i class="bi bi-clock-history"></i> Riwayat Event</div>
   {% if role == 'admin' %}
   <div class="nav-section-title">Admin</div>
+  <a href="/armada" class="nav-link" style="text-decoration:none;"><i class="bi bi-truck"></i> Kelola Armada</a>
   <a href="/users" class="nav-link" style="text-decoration:none;"><i class="bi bi-people"></i> Kelola User</a>
   {% endif %}
 </div>
@@ -648,7 +1056,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   <div class="panel">
     <div class="panel-title">Status armada</div>
-    <table id="armadaTable"><thead><tr><th>Armada</th><th>Zona</th><th>Update terakhir</th></tr></thead><tbody></tbody></table>
+    <table id="armadaTable"><thead><tr><th>Armada</th><th>Region</th><th>Zona</th><th>Status</th><th>Rute</th><th>Update terakhir</th></tr></thead><tbody></tbody></table>
   </div>
 
   <div class="panel">
@@ -693,7 +1101,22 @@ async function loadArmada() {
     const zoneLabel = a.last_zone_id
       ? '<span class="badge-zone in-zone">' + a.last_zone_id + '</span>'
       : '<span class="badge-zone out-zone">luar zona</span>';
-    tbody.innerHTML += '<tr><td>' + a.armada_id + '</td><td>' + zoneLabel + '</td><td>' + (a.last_update || '-') + '</td></tr>';
+
+    const statusColor = {
+      'Reparasi': '#E08A6B', 'Istirahat': '#E3AC44', 'Siap Trip Baru': '#6BB689'
+    }[a.status_operasional] || '#6BB689';
+    const statusLabel = '<span style="color:' + statusColor + '; font-size:12px;">' + (a.status_operasional || 'Aktif') + '</span>';
+
+    let ruteLabel = '-';
+    if (a.tujuan_lat && a.tujuan_lon && a.last_lat && a.last_lon) {
+      const gmapsUrl = 'https://www.google.com/maps/dir/?api=1&origin=' + a.last_lat + ',' + a.last_lon +
+        '&destination=' + a.tujuan_lat + ',' + a.tujuan_lon;
+      ruteLabel = '<a href="' + gmapsUrl + '" target="_blank" style="font-size:12px;">' +
+        '<i class="bi bi-signpost-2"></i> ke ' + a.tujuan_nama + '</a>';
+    }
+
+    tbody.innerHTML += '<tr><td>' + a.armada_id + '</td><td>' + (a.region || '-') + '</td><td>' + zoneLabel +
+      '</td><td>' + statusLabel + '</td><td>' + ruteLabel + '</td><td>' + (a.last_update || '-') + '</td></tr>';
   });
 }
 
