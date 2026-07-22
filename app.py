@@ -1389,20 +1389,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
 <div class="sidebar">
   <div class="nav-section-title">Menu</div>
-  <div class="nav-link active"><i class="bi bi-map"></i> Peta &amp; Armada</div>
-  <div class="nav-link"><i class="bi bi-geo-alt"></i> Zona Geofence</div>
-  <div class="nav-link"><i class="bi bi-clock-history"></i> Riwayat Event</div>
+  <a href="#panel-peta" class="nav-link active" style="text-decoration:none;"><i class="bi bi-map"></i> Peta &amp; Armada</a>
+  {% if role == 'admin' %}
+  <a href="/zona" class="nav-link" style="text-decoration:none;"><i class="bi bi-geo-alt"></i> Zona Geofence</a>
+  {% endif %}
+  <a href="#panel-event" class="nav-link" style="text-decoration:none;"><i class="bi bi-clock-history"></i> Riwayat Event</a>
   {% if role == 'admin' %}
   <div class="nav-section-title">Admin</div>
   <a href="/armada" class="nav-link" style="text-decoration:none;"><i class="bi bi-truck"></i> Kelola Armada &amp; Unit</a>
-  <a href="/zona" class="nav-link" style="text-decoration:none;"><i class="bi bi-geo-alt"></i> Kelola Zona</a>
   <a href="/users" class="nav-link" style="text-decoration:none;"><i class="bi bi-people"></i> Kelola User</a>
   {% endif %}
 </div>
 
 <div class="main-content">
 
-  <div class="panel">
+  <div class="panel" id="panel-peta">
     <div class="panel-title">Peta live armada</div>
     <div id="map"></div>
   </div>
@@ -1412,7 +1413,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <table id="armadaTable"><thead><tr><th>Unit</th><th>Armada</th><th>Zona</th><th>Status</th><th>Rute</th><th>Update terakhir</th></tr></thead><tbody></tbody></table>
   </div>
 
-  <div class="panel">
+  <div class="panel" id="panel-event">
     <div class="panel-title">Event geofence terbaru</div>
     <table id="eventTable"><thead><tr><th>Armada</th><th>Event</th><th>Waktu</th></tr></thead><tbody></tbody></table>
   </div>
