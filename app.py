@@ -2,6 +2,7 @@ import os
 import sqlite3
 import math
 import secrets
+import json
 from datetime import datetime
 from flask import Flask, request, jsonify, g, redirect, url_for, render_template_string, flash
 from flask_cors import CORS
@@ -975,17 +976,23 @@ ZONA_HTML = """<!DOCTYPE html>
 <title>Kelola Zona/Geofence - Fleet Tracker</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <style>
   body { margin:0; background:#1C1A17; color:#F3EFE6; font-family: -apple-system, "Segoe UI", sans-serif; padding:24px; }
   .panel { background:#252220; border:1px solid #423D36; border-radius:8px; padding:20px; max-width:900px; margin-bottom:20px; }
   .form-control, .form-select { background:#2D2A25; border:1px solid #423D36; color:#F3EFE6; }
   .form-control:focus, .form-select:focus { background:#2D2A25; color:#F3EFE6; border-color:#FF6A1A; box-shadow:none; }
   .btn-primary { background:#FF6A1A; border-color:#FF6A1A; }
+  .btn-primary:disabled { background:#5A534A; border-color:#5A534A; }
   table { width:100%; font-size:13px; }
   th, td { padding:8px; border-bottom:1px solid #423D36; vertical-align:middle; }
   a { color:#FF6A1A; }
   .form-text { color:#8A8276; font-size:12px; }
   label.form-label { font-size:12px; color:#B8AFA1; }
+  #drawMap { height: 380px; border-radius:6px; margin-bottom:12px; }
+  .info-box { background:#1C1A17; border:1px solid #423D36; border-radius:4px; padding:8px 12px; font-size:12px; font-family:monospace; color:#8A8276; }
+  .form-range { accent-color: #FF6A1A; }
 </style>
 </head>
 <body>
@@ -999,32 +1006,33 @@ ZONA_HTML = """<!DOCTYPE html>
 <div class="panel">
   <h6>Tambah zona baru</h6>
   <p class="form-text">
-    Cara cepat dapetin koordinat: buka Google Maps, klik-tahan lokasi yang mau dijadikan zona, koordinat (lat, lon) muncul di kotak pencarian atau popup -- tinggal copy ke sini.
+    <i class="bi bi-cursor"></i> Klik di peta untuk naruh titik pusat geofence. Geser slider untuk atur radius area. Lingkaran oranye lain yang sudah ada di peta itu zona yang sudah terdaftar sebelumnya (buat referensi biar gak numpuk).
   </p>
-  <form method="POST" action="/zona/create" class="row g-2">
-    <div class="col-md-3">
+  <div id="drawMap"></div>
+
+  <form method="POST" action="/zona/create" class="row g-2" id="createForm">
+    <div class="col-md-4">
       <label class="form-label">Kode zona</label>
       <input type="text" name="zona_id" class="form-control" placeholder="cth: ZONA-GUDANG-BDG" required>
     </div>
-    <div class="col-md-3">
+    <div class="col-md-4">
       <label class="form-label">Nama zona</label>
       <input type="text" name="nama" class="form-control" placeholder="cth: Gudang Bandung" required>
     </div>
-    <div class="col-md-2">
-      <label class="form-label">Latitude</label>
-      <input type="text" name="lat" class="form-control" placeholder="cth: -6.9175" required>
+    <div class="col-md-4">
+      <label class="form-label">Radius: <span id="radiusLabel">300</span> meter</label>
+      <input type="range" class="form-range" id="radiusSlider" min="50" max="3000" step="50" value="300">
     </div>
-    <div class="col-md-2">
-      <label class="form-label">Longitude</label>
-      <input type="text" name="lon" class="form-control" placeholder="cth: 107.6191" required>
+    <div class="col-md-8">
+      <label class="form-label">Koordinat titik pusat</label>
+      <div class="info-box" id="coordDisplay">Belum ada titik dipilih -- klik di peta dulu</div>
     </div>
-    <div class="col-md-1">
-      <label class="form-label">Radius (m)</label>
-      <input type="text" name="radius_meter" class="form-control" placeholder="300" required>
+    <div class="col-md-4 d-flex align-items-end">
+      <button type="submit" class="btn btn-primary w-100" id="submitBtn" disabled>+ Simpan Zona</button>
     </div>
-    <div class="col-md-1 d-flex align-items-end">
-      <button type="submit" class="btn btn-primary w-100">+</button>
-    </div>
+    <input type="hidden" name="lat" id="inputLat">
+    <input type="hidden" name="lon" id="inputLon">
+    <input type="hidden" name="radius_meter" id="inputRadius" value="300">
   </form>
 </div>
 
@@ -1052,6 +1060,64 @@ ZONA_HTML = """<!DOCTYPE html>
     </tbody>
   </table>
 </div>
+
+<script>
+const existingZonas = {{ zonas_json|safe }};
+
+const map = L.map('drawMap').setView([-6.9, 107.6], 8);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+// Tampilkan zona yang udah ada sebagai referensi (abu-abu, gak bisa diedit di sini)
+existingZonas.forEach(z => {
+  L.circle([z.lat, z.lon], { radius: z.radius_meter, color: '#8A8276', weight: 1, fillOpacity: 0.05 })
+    .addTo(map).bindPopup(z.nama + ' (sudah terdaftar)');
+});
+
+let drawCircle = null;
+let drawMarker = null;
+let currentRadius = 300;
+
+function updateCircle(lat, lon) {
+  if (drawCircle) map.removeLayer(drawCircle);
+  if (drawMarker) map.removeLayer(drawMarker);
+
+  drawCircle = L.circle([lat, lon], { radius: currentRadius, color: '#FF6A1A', weight: 2, fillOpacity: 0.15 }).addTo(map);
+  drawMarker = L.marker([lat, lon], { draggable: true }).addTo(map);
+
+  drawMarker.on('drag', (e) => {
+    const pos = e.target.getLatLng();
+    drawCircle.setLatLng(pos);
+    setCoords(pos.lat, pos.lng);
+  });
+
+  setCoords(lat, lon);
+}
+
+function setCoords(lat, lon) {
+  document.getElementById('inputLat').value = lat.toFixed(6);
+  document.getElementById('inputLon').value = lon.toFixed(6);
+  document.getElementById('coordDisplay').textContent = lat.toFixed(6) + ', ' + lon.toFixed(6);
+  document.getElementById('submitBtn').disabled = false;
+}
+
+map.on('click', (e) => {
+  updateCircle(e.latlng.lat, e.latlng.lng);
+});
+
+document.getElementById('radiusSlider').addEventListener('input', (e) => {
+  currentRadius = parseInt(e.target.value);
+  document.getElementById('radiusLabel').textContent = currentRadius;
+  document.getElementById('inputRadius').value = currentRadius;
+  if (drawCircle) drawCircle.setRadius(currentRadius);
+});
+
+document.getElementById('createForm').addEventListener('submit', (e) => {
+  if (!document.getElementById('inputLat').value) {
+    e.preventDefault();
+    alert('Klik di peta dulu untuk menentukan titik pusat geofence.');
+  }
+});
+</script>
 </body>
 </html>"""
 
@@ -1063,14 +1129,20 @@ EDIT_ZONA_HTML = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Edit Zona - Fleet Tracker</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <style>
   body { margin:0; background:#1C1A17; color:#F3EFE6; font-family: -apple-system, "Segoe UI", sans-serif; padding:24px; }
-  .panel { background:#252220; border:1px solid #423D36; border-radius:8px; padding:20px; max-width:500px; }
+  .panel { background:#252220; border:1px solid #423D36; border-radius:8px; padding:20px; max-width:600px; }
   .form-control { background:#2D2A25; border:1px solid #423D36; color:#F3EFE6; }
   .form-control:focus { background:#2D2A25; color:#F3EFE6; border-color:#FF6A1A; box-shadow:none; }
   .btn-primary { background:#FF6A1A; border-color:#FF6A1A; }
   a { color:#FF6A1A; }
   label.form-label { font-size:12px; color:#B8AFA1; }
+  #editMap { height: 350px; border-radius:6px; margin-bottom:12px; }
+  .info-box { background:#1C1A17; border:1px solid #423D36; border-radius:4px; padding:8px 12px; font-size:12px; font-family:monospace; color:#8A8276; }
+  .form-range { accent-color: #FF6A1A; }
+  .form-text { color:#8A8276; font-size:12px; }
 </style>
 </head>
 <body>
@@ -1078,26 +1150,65 @@ EDIT_ZONA_HTML = """<!DOCTYPE html>
 <h4>Edit Zona: {{ z.zona_id }}</h4>
 
 <div class="panel">
-  <form method="POST">
+  <p class="form-text"><i class="bi bi-cursor"></i> Klik di peta atau geser marker untuk pindah titik pusat. Geser slider untuk ubah radius.</p>
+  <div id="editMap"></div>
+
+  <form method="POST" id="editForm">
     <div class="mb-2">
       <label class="form-label">Nama zona</label>
       <input type="text" name="nama" class="form-control" value="{{ z.nama }}" required>
     </div>
     <div class="mb-2">
-      <label class="form-label">Latitude</label>
-      <input type="text" name="lat" class="form-control" value="{{ z.lat }}" required>
+      <label class="form-label">Radius: <span id="radiusLabel">{{ z.radius_meter|int }}</span> meter</label>
+      <input type="range" class="form-range" id="radiusSlider" min="50" max="3000" step="50" value="{{ z.radius_meter|int }}">
     </div>
     <div class="mb-2">
-      <label class="form-label">Longitude</label>
-      <input type="text" name="lon" class="form-control" value="{{ z.lon }}" required>
+      <label class="form-label">Koordinat titik pusat</label>
+      <div class="info-box" id="coordDisplay">{{ z.lat }}, {{ z.lon }}</div>
     </div>
-    <div class="mb-2">
-      <label class="form-label">Radius (meter)</label>
-      <input type="text" name="radius_meter" class="form-control" value="{{ z.radius_meter|int }}" required>
-    </div>
+    <input type="hidden" name="lat" id="inputLat" value="{{ z.lat }}">
+    <input type="hidden" name="lon" id="inputLon" value="{{ z.lon }}">
+    <input type="hidden" name="radius_meter" id="inputRadius" value="{{ z.radius_meter|int }}">
     <button type="submit" class="btn btn-primary">Simpan Perubahan</button>
   </form>
 </div>
+
+<script>
+const startLat = {{ z.lat }};
+const startLon = {{ z.lon }};
+let currentRadius = {{ z.radius_meter|int }};
+
+const map = L.map('editMap').setView([startLat, startLon], 14);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+let drawCircle = L.circle([startLat, startLon], { radius: currentRadius, color: '#FF6A1A', weight: 2, fillOpacity: 0.15 }).addTo(map);
+let drawMarker = L.marker([startLat, startLon], { draggable: true }).addTo(map);
+
+function setCoords(lat, lon) {
+  document.getElementById('inputLat').value = lat.toFixed(6);
+  document.getElementById('inputLon').value = lon.toFixed(6);
+  document.getElementById('coordDisplay').textContent = lat.toFixed(6) + ', ' + lon.toFixed(6);
+}
+
+drawMarker.on('drag', (e) => {
+  const pos = e.target.getLatLng();
+  drawCircle.setLatLng(pos);
+  setCoords(pos.lat, pos.lng);
+});
+
+map.on('click', (e) => {
+  drawMarker.setLatLng(e.latlng);
+  drawCircle.setLatLng(e.latlng);
+  setCoords(e.latlng.lat, e.latlng.lng);
+});
+
+document.getElementById('radiusSlider').addEventListener('input', (e) => {
+  currentRadius = parseInt(e.target.value);
+  document.getElementById('radiusLabel').textContent = currentRadius;
+  document.getElementById('inputRadius').value = currentRadius;
+  drawCircle.setRadius(currentRadius);
+});
+</script>
 </body>
 </html>"""
 
@@ -1108,7 +1219,8 @@ EDIT_ZONA_HTML = """<!DOCTYPE html>
 def zona_page():
     db = get_db()
     zonas = db.execute("SELECT * FROM zona ORDER BY nama").fetchall()
-    return render_template_string(ZONA_HTML, zonas=zonas)
+    zonas_json = json.dumps([dict(z) for z in zonas])
+    return render_template_string(ZONA_HTML, zonas=zonas, zonas_json=zonas_json)
 
 
 @app.route("/zona/create", methods=["POST"])
