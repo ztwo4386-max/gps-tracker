@@ -3,7 +3,7 @@ import sqlite3
 import math
 import secrets
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, g, redirect, url_for, render_template_string, flash
 from flask_cors import CORS
 from flask_login import (
@@ -70,6 +70,7 @@ def init_db():
         ("status_operasional", "TEXT DEFAULT 'Aktif'"),
         ("tujuan_zona_id", "TEXT"),
         ("group_id", "TEXT"),
+        ("last_speed", "REAL"),
     ]:
         try:
             cur.execute(f"ALTER TABLE armada ADD COLUMN {kolom} {tipe}")
@@ -104,6 +105,21 @@ def init_db():
             zona_id TEXT,
             jenis_event TEXT,
             waktu TEXT
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS voyage (
+            voyage_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            armada_id TEXT NOT NULL,
+            asal TEXT,
+            tujuan TEXT,
+            start_time TEXT,
+            end_time TEXT,
+            start_lat REAL,
+            start_lon REAL,
+            jarak_km REAL,
+            status TEXT DEFAULT 'ONGOING'
         )
     """)
 
@@ -167,6 +183,28 @@ def find_current_zone(db, lat, lon):
     return None, None
 
 
+def hitung_eta(current_lat, current_lon, dest_lat, dest_lon, speed_kmh):
+    """
+    Estimasi waktu tiba berdasarkan jarak garis lurus (haversine) dan kecepatan saat ini.
+    Ini estimasi kasar -- gak memperhitungkan rute jalan sebenarnya, cuma jarak lurus.
+    Return None kalau kendaraan diam (speed <= 0), karena ETA gak bisa dihitung.
+    """
+    jarak_meter = haversine_meters(current_lat, current_lon, dest_lat, dest_lon)
+    jarak_km = jarak_meter / 1000
+
+    if speed_kmh is None or speed_kmh <= 0:
+        return {"jarak_km": round(jarak_km, 1), "eta_jam": None, "eta_waktu": None}
+
+    eta_jam = jarak_km / speed_kmh
+    eta_waktu = datetime.utcnow() + timedelta(hours=eta_jam)
+
+    return {
+        "jarak_km": round(jarak_km, 1),
+        "eta_jam": round(eta_jam, 2),
+        "eta_waktu": eta_waktu.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
 # ---------- Autentikasi ----------
 
 class User(UserMixin):
@@ -191,7 +229,7 @@ LOGIN_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Login - Copi jomok</title>
+<title>Login - Fleet Tracker</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
 <style>
   body {
@@ -562,8 +600,8 @@ def track():
     else:
         last_zone_id = row["last_zone_id"]
         db.execute(
-            "UPDATE armada SET last_lat=?, last_lon=?, last_update=? WHERE armada_id=?",
-            (lat, lon, waktu, armada_id),
+            "UPDATE armada SET last_lat=?, last_lon=?, last_update=?, last_speed=? WHERE armada_id=?",
+            (lat, lon, waktu, speed, armada_id),
         )
 
     current_zone_id, current_zone_name = find_current_zone(db, lat, lon)
@@ -576,6 +614,23 @@ def track():
                 (armada_id, current_zone_id, waktu),
             )
             event = "masuk " + current_zone_name
+
+            # Selesaikan voyage ONGOING kalau ada -- unit baru aja tiba di suatu zona
+            ongoing = db.execute(
+                "SELECT * FROM voyage WHERE armada_id=? AND status='ONGOING' ORDER BY voyage_id DESC LIMIT 1",
+                (armada_id,),
+            ).fetchone()
+            if ongoing:
+                jarak_km = None
+                if ongoing["start_lat"] is not None and ongoing["start_lon"] is not None:
+                    jarak_km = haversine_meters(
+                        ongoing["start_lat"], ongoing["start_lon"], lat, lon
+                    ) / 1000
+                db.execute(
+                    """UPDATE voyage SET tujuan=?, end_time=?, jarak_km=?, status='COMPLETED'
+                       WHERE voyage_id=?""",
+                    (current_zone_name, waktu, jarak_km, ongoing["voyage_id"]),
+                )
 
             # Auto-update status kalau zona yang dimasuki adalah tujuan terjadwal unit ini
             tujuan_row = db.execute(
@@ -593,6 +648,15 @@ def track():
                 (armada_id, last_zone_id, waktu),
             )
             event = "keluar zona"
+
+            # Mulai voyage baru -- unit baru aja berangkat dari suatu zona
+            zona_asal = db.execute("SELECT nama FROM zona WHERE zona_id=?", (last_zone_id,)).fetchone()
+            asal_nama = zona_asal["nama"] if zona_asal else "Unknown"
+            db.execute(
+                """INSERT INTO voyage (armada_id, asal, start_time, start_lat, start_lon, status)
+                   VALUES (?, ?, ?, ?, ?, 'ONGOING')""",
+                (armada_id, asal_nama, waktu, lat, lon),
+            )
 
         db.execute(
             "UPDATE armada SET last_zone_id=? WHERE armada_id=?",
@@ -616,7 +680,7 @@ ARMADA_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kelola Armada &amp; Unit - Copi Jomok</title>
+<title>Kelola Armada &amp; Unit - Fleet Tracker</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
 <style>
@@ -1302,6 +1366,97 @@ def zona_delete(zona_id):
     return redirect(url_for("zona_page"))
 
 
+# ---------- Riwayat Voyage (trip asal-tujuan-jarak) ----------
+
+VOYAGE_HTML = """<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Riwayat Voyage - Fleet Tracker</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+<style>
+  body { margin:0; background:#1C1A17; color:#F3EFE6; font-family: -apple-system, "Segoe UI", sans-serif; padding:24px; }
+  .panel { background:#252220; border:1px solid #423D36; border-radius:8px; padding:20px; }
+  table { width:100%; font-size:13px; }
+  th, td { padding:8px; border-bottom:1px solid #423D36; }
+  a { color:#FF6A1A; }
+  .badge-status { padding:2px 8px; border-radius:4px; font-size:11px; }
+  .ongoing { background:rgba(227,172,68,0.15); color:#E3AC44; }
+  .completed { background:rgba(107,182,137,0.15); color:#6BB689; }
+  .form-select { background:#2D2A25; border:1px solid #423D36; color:#F3EFE6; max-width:250px; }
+</style>
+</head>
+<body>
+<p><a href="/">&larr; Kembali ke dashboard</a></p>
+<h4>Riwayat Voyage / Perjalanan</h4>
+<p style="color:#8A8276; font-size:12px;">
+  Voyage otomatis tercatat: dimulai saat Unit keluar dari suatu zona, selesai saat Unit tiba di zona lain.
+  Jarak dihitung garis lurus (haversine) antara titik berangkat dan titik tiba, bukan jarak rute jalan sebenarnya.
+</p>
+
+<div class="panel">
+  <form method="GET" class="mb-3">
+    <select name="armada_id" class="form-select" onchange="this.form.submit()">
+      <option value="">Semua Unit</option>
+      {% for uid in armada_ids %}
+      <option value="{{ uid }}" {% if uid == filter_armada %}selected{% endif %}>{{ uid }}</option>
+      {% endfor %}
+    </select>
+  </form>
+
+  <table>
+    <thead><tr><th>Unit</th><th>Asal</th><th>Tujuan</th><th>Berangkat</th><th>Tiba</th><th>Jarak</th><th>Status</th></tr></thead>
+    <tbody>
+    {% for v in voyages %}
+      <tr>
+        <td>{{ v.armada_id }}</td>
+        <td>{{ v.asal or '-' }}</td>
+        <td>{{ v.tujuan or '-' }}</td>
+        <td>{{ v.start_time or '-' }}</td>
+        <td>{{ v.end_time or '-' }}</td>
+        <td>{{ '%.1f'|format(v.jarak_km) + ' km' if v.jarak_km else '-' }}</td>
+        <td>
+          <span class="badge-status {{ 'ongoing' if v.status == 'ONGOING' else 'completed' }}">{{ v.status }}</span>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" style="color:#8A8276;">Belum ada riwayat voyage. Voyage baru tercatat setelah Unit keluar dari suatu zona geofence.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+</body>
+</html>"""
+
+
+@app.route("/voyage")
+@login_required
+def voyage_page():
+    db = get_db()
+
+    filter_armada = request.args.get("armada_id", "").strip()
+
+    if current_user.role == "supir" and current_user.armada_id:
+        # Supir cuma bisa lihat voyage armada sendiri
+        voyages = db.execute(
+            "SELECT * FROM voyage WHERE armada_id=? ORDER BY voyage_id DESC LIMIT 100",
+            (current_user.armada_id,),
+        ).fetchall()
+        armada_ids = [current_user.armada_id]
+    else:
+        armada_ids = [r["armada_id"] for r in db.execute("SELECT DISTINCT armada_id FROM armada ORDER BY armada_id").fetchall()]
+        if filter_armada:
+            voyages = db.execute(
+                "SELECT * FROM voyage WHERE armada_id=? ORDER BY voyage_id DESC LIMIT 200",
+                (filter_armada,),
+            ).fetchall()
+        else:
+            voyages = db.execute("SELECT * FROM voyage ORDER BY voyage_id DESC LIMIT 200").fetchall()
+
+    return render_template_string(VOYAGE_HTML, voyages=voyages, armada_ids=armada_ids, filter_armada=filter_armada)
+
+
 # ---------- Routes: data buat dashboard ----------
 
 @app.route("/api/armada")
@@ -1319,7 +1474,19 @@ def api_armada():
         rows = db.execute(query + " WHERE a.armada_id = ?", (current_user.armada_id,)).fetchall()
     else:
         rows = db.execute(query).fetchall()
-    return jsonify([dict(r) for r in rows])
+
+    result = []
+    for r in rows:
+        d = dict(r)
+        # Hitung ETA kalau unit punya tujuan terjadwal dan posisi terkini diketahui
+        if d.get("tujuan_lat") and d.get("tujuan_lon") and d.get("last_lat") and d.get("last_lon"):
+            eta = hitung_eta(d["last_lat"], d["last_lon"], d["tujuan_lat"], d["tujuan_lon"], d.get("last_speed"))
+            d["eta"] = eta
+        else:
+            d["eta"] = None
+        result.append(d)
+
+    return jsonify(result)
 
 
 @app.route("/api/zona")
@@ -1506,6 +1673,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <a href="/zona" class="nav-link" style="text-decoration:none;"><i class="bi bi-geo-alt"></i> Zona Geofence</a>
   {% endif %}
   <a href="#panel-event" class="nav-link" style="text-decoration:none;"><i class="bi bi-clock-history"></i> Riwayat Event</a>
+  <a href="/voyage" class="nav-link" style="text-decoration:none;"><i class="bi bi-signpost-split"></i> Riwayat Voyage</a>
   {% if role == 'admin' %}
   <div class="nav-section-title">Admin</div>
   <a href="/armada" class="nav-link" style="text-decoration:none;"><i class="bi bi-truck"></i> Kelola Armada &amp; Unit</a>
@@ -1604,6 +1772,18 @@ async function loadArmada() {
         '&destination=' + a.tujuan_lat + ',' + a.tujuan_lon;
       ruteLabel = '<a href="' + gmapsUrl + '" target="_blank" style="font-size:12px;">' +
         '<i class="bi bi-signpost-2"></i> ke ' + a.tujuan_nama + '</a>';
+
+      if (a.eta) {
+        if (a.eta.eta_jam !== null) {
+          const jam = Math.floor(a.eta.eta_jam);
+          const menit = Math.round((a.eta.eta_jam - jam) * 60);
+          ruteLabel += '<br><span style="font-size:11px; color:#8A8276;">' +
+            a.eta.jarak_km + ' km &middot; ETA ~' + jam + 'j ' + menit + 'm</span>';
+        } else {
+          ruteLabel += '<br><span style="font-size:11px; color:#8A8276;">' +
+            a.eta.jarak_km + ' km &middot; unit sedang diam</span>';
+        }
+      }
     }
 
     tbody.innerHTML += '<tr><td>' + a.armada_id + '</td><td>' + (a.group_nama || '-') + '</td><td>' + zoneLabel +
