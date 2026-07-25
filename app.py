@@ -1601,7 +1601,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .topnav .status-pill { font-size: 12px; color: var(--text-dim); display:flex; align-items:center; gap:6px; }
   .topnav .status-dot { width:7px; height:7px; border-radius:50%; background:#6BB689; display:inline-block; animation: pulse 2s infinite; }
   @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.35; } }
-
   /* ---------- SIDEBAR NAVIGASI (kiri) ---------- */
   /* GANTI BAGIAN INI kalau mau pakai markup sidebar dari template Laravel lu */
   .sidebar {
@@ -1766,17 +1765,150 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .popup-title { font-weight:700; font-size:13px; margin-bottom:4px; }
   .popup-row { font-size:12px; margin-top:2px; }
   .popup-row .lbl { color:#8A8276; }
+  .leaflet-popup-content-wrapper { border-radius: 10px; max-width: 280px; }
+  .leaflet-popup-content { margin: 10px 12px; }
 
-  @media (max-width: 992px) {
-    .main-content { flex-direction: column; height: auto; overflow: visible; }
-    .map-wrap { height: 55vh; }
-    .veh-sidebar { width: 100%; flex-basis: auto; border-left: none; border-top: 1px solid var(--border-c); }
-    .veh-list, .event-list { max-height: 340px; }
+  /* ---------- Statistik horizontal untuk mobile (overlay di atas peta) ---------- */
+  .mobile-stats-strip {
+    display: none;
+    position: absolute;
+    top: 10px; left: 10px; right: 10px;
+    z-index: 480;
+    gap: 8px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .mobile-stats-strip::-webkit-scrollbar { display: none; }
+  .mstat-chip {
+    flex: 0 0 auto;
+    background: rgba(37,34,32,0.92);
+    border: 1px solid var(--border-c);
+    border-radius: 10px;
+    padding: 8px 14px;
+    min-width: 84px;
+    text-align: center;
+  }
+  .mstat-chip .mstat-val { display:block; font-size:18px; font-weight:700; line-height:1.1; }
+  .mstat-chip .mstat-label { display:block; font-size:11px; color:var(--text-dim); margin-top:2px; white-space:nowrap; }
+
+  /* ---------- Tombol floating buat buka daftar armada (mobile) ---------- */
+  .fab-vehlist {
+    display: none;
+    position: absolute;
+    bottom: 20px; right: 12px;
+    z-index: 490;
+    width: 56px; height: 56px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #1C1A17;
+    border: none;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+    align-items: center; justify-content: center;
+    font-size: 22px;
+    cursor: pointer;
+  }
+  .fab-badge {
+    position: absolute;
+    top: -4px; right: -4px;
+    background: #C97A6D;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    border-radius: 50%;
+    width: 20px; height: 20px;
+    display: flex; align-items:center; justify-content:center;
   }
 
+  /* ---------- Backdrop buat drawer armada di mobile ---------- */
+  .drawer-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 1100;
+    opacity: 0;
+    transition: opacity 0.25s ease;
+  }
+  .drawer-backdrop.open { display: block; opacity: 1; }
+
+  /* ---------- Handle/header drawer (cuma tampil di mobile) ---------- */
+  .veh-sidebar-handle { display: none; flex: 0 0 auto; padding: 10px 14px 6px; }
+  .drag-bar { width:40px; height:4px; border-radius:2px; background:var(--border-c); margin:0 auto 10px; }
+  .veh-sidebar-header { display:flex; align-items:center; justify-content:space-between; font-size:15px; font-weight:600; }
+  .drawer-close-btn {
+    width:44px; height:44px;
+    border-radius:8px;
+    border:1px solid var(--border-c);
+    background: var(--bg-panel-2);
+    color: var(--text-main);
+    display:flex; align-items:center; justify-content:center;
+    font-size:18px;
+    cursor: pointer;
+  }
+
+  /* ---------- TABLET (769px - 1024px): map tetap kesamping, sidebar sedikit diciutin ---------- */
+  @media (max-width: 1024px) and (min-width: 769px) {
+    :root { --veh-sidebar-w: 260px; }
+    .stat-box .stat-val { font-size: 18px; }
+  }
+
+  /* ---------- MOBILE (<=768px): sidebar navigasi disembunyikan, vehicle sidebar jadi drawer ---------- */
   @media (max-width: 768px) {
     .sidebar { display:none; }
     .main-content { margin-left: 0; }
+
+    .mobile-stats-strip { display: flex; right: 64px; }
+    .fab-vehlist { display: flex; }
+
+    /* stats-grid desktop disembunyikan di mobile, digantikan mobile-stats-strip di atas peta */
+    .stats-grid { display: none; }
+
+    .veh-sidebar {
+      position: fixed;
+      left: 0; right: 0; bottom: 0; top: auto;
+      width: 100%;
+      flex-basis: auto;
+      height: 75vh;
+      max-height: 75vh;
+      border-left: none;
+      border-top: 1px solid var(--border-c);
+      border-radius: 16px 16px 0 0;
+      box-shadow: 0 -6px 24px rgba(0,0,0,0.45);
+      transform: translateY(100%);
+      transition: transform 0.28s ease;
+      z-index: 1200;
+    }
+    .veh-sidebar.drawer-open { transform: translateY(0); }
+    .veh-sidebar-handle { display: block; }
+
+    .veh-list, .event-list { max-height: none; }
+
+    /* target sentuh minimal 44x44px */
+    .map-ctrl-btn { width:44px; height:44px; font-size:17px; }
+    .veh-tab { padding: 12px 0; font-size: 13px; }
+    .veh-card { padding: 12px 14px; }
+    .veh-card-id { font-size: 14px; }
+    .veh-card-meta { font-size: 12px; }
+    .no-data { font-size: 13px; }
+    .event-row { font-size: 13px; padding: 10px 6px; }
+
+    .topnav { padding: 0 12px; }
+    .topnav .brand { font-size: 14px; }
+    .topnav > div { gap: 10px !important; }
+
+    .leaflet-popup-content-wrapper { max-width: 78vw; }
+    .leaflet-popup-content { font-size: 13px; }
+  }
+
+  @media (max-width: 480px) {
+    .user-info-text, .logout-text { display: none; }
+  }
+
+  @media (max-width: 360px) {
+    .status-text { display: none; }
+    .mstat-chip { min-width: 74px; padding: 7px 10px; }
+    .fab-vehlist { width:52px; height:52px; bottom:16px; right:10px; }
   }
 </style>
 </head>
@@ -1785,11 +1917,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <div class="topnav">
   <div class="brand"><i class="bi bi-truck"></i> Fleet Tracker</div>
   <div style="display:flex; align-items:center; gap:16px;">
-    <div class="status-pill"><span class="status-dot"></span><span id="lastRefresh">Memuat...</span></div>
-    <div style="font-size:13px; color:#B8AFA1;">
+    <div class="status-pill"><span class="status-dot"></span><span id="lastRefresh" class="status-text">Memuat...</span></div>
+    <div class="user-info-text" style="font-size:13px; color:#B8AFA1;">
       {{ username }} <span style="background:#2D2A25; padding:2px 8px; border-radius:4px; font-size:11px; margin-left:4px;">{{ role }}</span>
     </div>
-    <a href="/logout" style="color:#B8AFA1; font-size:13px;"><i class="bi bi-box-arrow-right"></i> Logout</a>
+    <a href="/logout" style="color:#B8AFA1; font-size:13px;"><i class="bi bi-box-arrow-right"></i> <span class="logout-text">Logout</span></a>
   </div>
 </div>
 
@@ -1812,6 +1944,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   <div class="map-wrap" id="mapWrap">
     <div id="map"></div>
+
+    <div class="mobile-stats-strip" id="mobileStatsStrip">
+      <div class="mstat-chip"><span class="mstat-val" id="statTotalM">0</span><span class="mstat-label">Total</span></div>
+      <div class="mstat-chip"><span class="mstat-val" id="statBergerakM">0</span><span class="mstat-label">Bergerak</span></div>
+      <div class="mstat-chip"><span class="mstat-val" id="statZonaM">0</span><span class="mstat-label">Di Zona</span></div>
+      <div class="mstat-chip"><span class="mstat-val" id="statTibaM">0</span><span class="mstat-label">Tiba</span></div>
+    </div>
+
     <div class="map-controls">
       <div class="map-ctrl-btn" id="fullscreenBtn" title="Fullscreen peta">
         <i class="bi bi-arrows-fullscreen" id="fullscreenIcon"></i>
@@ -1823,9 +1963,24 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <i class="bi bi-fullscreen"></i>
       </div>
     </div>
+
+    <button class="fab-vehlist" id="fabVehList" title="Daftar armada">
+      <i class="bi bi-truck"></i>
+      <span class="fab-badge" id="fabBadge">0</span>
+    </button>
   </div>
 
+  <div class="drawer-backdrop" id="drawerBackdrop"></div>
+
   <div class="veh-sidebar" id="panel-event">
+    <div class="veh-sidebar-handle" id="vehSidebarHandle">
+      <div class="drag-bar"></div>
+      <div class="veh-sidebar-header">
+        <span>Daftar Armada</span>
+        <button class="drawer-close-btn" id="drawerCloseBtn" title="Tutup"><i class="bi bi-x-lg"></i></button>
+      </div>
+    </div>
+
     <div class="stats-grid" id="statsGrid">
       <div class="stat-box"><div class="stat-val" id="statTotal">0</div><div class="stat-label">Total Unit</div></div>
       <div class="stat-box"><div class="stat-val" id="statBergerak">0</div><div class="stat-label">Bergerak</div></div>
@@ -1949,6 +2104,7 @@ function focusArmada(armadaId) {
   map.flyTo([a.last_lat, a.last_lon], Math.max(map.getZoom(), 13), { duration: 0.6 });
   if (markers[armadaId]) markers[armadaId].openPopup();
   renderVehicleList(lastArmadaData);
+  if (window.matchMedia('(max-width: 768px)').matches) closeDrawer(); // klik armada otomatis nutup drawer di mobile
 }
 
 // ---------- Popup content ----------
@@ -1997,6 +2153,12 @@ function renderStats(list) {
   document.getElementById('statBergerak').textContent = bergerak;
   document.getElementById('statZona').textContent = diZona;
   document.getElementById('statTiba').textContent = tiba;
+  // Strip statistik mobile (di atas peta) & badge FAB - pakai angka yang sama, gak fetch ulang
+  document.getElementById('statTotalM').textContent = total;
+  document.getElementById('statBergerakM').textContent = bergerak;
+  document.getElementById('statZonaM').textContent = diZona;
+  document.getElementById('statTibaM').textContent = tiba;
+  document.getElementById('fabBadge').textContent = total;
 }
 
 // ---------- Vehicle sidebar list ----------
@@ -2042,7 +2204,7 @@ async function loadArmada() {
         markers[a.armada_id].setPopupContent(popupHtml);
         markers[a.armada_id].setIcon(icon);
       } else {
-        const marker = L.marker(pos, { icon }).bindPopup(popupHtml);
+        const marker = L.marker(pos, { icon }).bindPopup(popupHtml, { maxWidth: 260, minWidth: 200 });
         marker.on('click', () => toggleTrail(a.armada_id));
         clusterGroup.addLayer(marker);
         markers[a.armada_id] = marker;
@@ -2125,6 +2287,31 @@ document.getElementById('fitAllBtn').addEventListener('click', () => {
   const bounds = L.latLngBounds(withPos.map(a => [a.last_lat, a.last_lon]));
   map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
 });
+
+// ---------- Drawer daftar armada (mobile) ----------
+const vehSidebarEl = document.getElementById('panel-event');
+const drawerBackdrop = document.getElementById('drawerBackdrop');
+function openDrawer() {
+  vehSidebarEl.classList.add('drawer-open');
+  drawerBackdrop.classList.add('open');
+}
+function closeDrawer() {
+  vehSidebarEl.classList.remove('drawer-open');
+  drawerBackdrop.classList.remove('open');
+}
+document.getElementById('fabVehList').addEventListener('click', openDrawer);
+document.getElementById('drawerCloseBtn').addEventListener('click', closeDrawer);
+drawerBackdrop.addEventListener('click', closeDrawer);
+
+// swipe ke bawah pada handle buat nutup drawer
+let drawerTouchStartY = null;
+const vehSidebarHandle = document.getElementById('vehSidebarHandle');
+vehSidebarHandle.addEventListener('touchstart', e => { drawerTouchStartY = e.touches[0].clientY; }, { passive: true });
+vehSidebarHandle.addEventListener('touchmove', e => {
+  if (drawerTouchStartY === null) return;
+  if (e.touches[0].clientY - drawerTouchStartY > 60) { closeDrawer(); drawerTouchStartY = null; }
+}, { passive: true });
+vehSidebarHandle.addEventListener('touchend', () => { drawerTouchStartY = null; });
 
 loadZones();
 refreshAll();
