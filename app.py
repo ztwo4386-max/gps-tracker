@@ -703,6 +703,33 @@ ARMADA_HTML = """<!DOCTYPE html>
   .copy-btn { font-size:11px; padding:2px 8px; }
   .form-text { color:#8A8276; font-size:12px; }
   label.form-label { font-size:12px; color:#B8AFA1; }
+  .edit-btn { background:none; border:none; padding:0; color:#FF6A1A; text-decoration:underline; font-size:13px; cursor:pointer; }
+
+  /* ---------- Drawer edit unit (geser dari kanan, gak pindah halaman) ---------- */
+  .edit-drawer-backdrop {
+    display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5);
+    z-index:1100; opacity:0; transition:opacity .2s ease;
+  }
+  .edit-drawer-backdrop.open { display:block; opacity:1; }
+  .edit-drawer {
+    position:fixed; top:0; right:0; bottom:0; width:400px; max-width:92vw;
+    background:#252220; border-left:1px solid #423D36; box-shadow:-6px 0 24px rgba(0,0,0,0.45);
+    z-index:1200; transform:translateX(100%); transition:transform .25s ease;
+    display:flex; flex-direction:column; padding:20px; overflow-y:auto;
+  }
+  .edit-drawer.open { transform:translateX(0); }
+  .edit-drawer-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }
+  .edit-drawer-header h5 { margin:0; }
+  .edit-drawer-close { width:36px; height:36px; border-radius:8px; border:1px solid #423D36; background:#2D2A25; color:#F3EFE6; display:flex; align-items:center; justify-content:center; cursor:pointer; }
+
+  /* ---------- Toast notifikasi simpan ---------- */
+  .save-toast {
+    position:fixed; bottom:24px; left:50%; transform:translate(-50%, 20px);
+    background:#2D2A25; border:1px solid #6BB689; color:#F3EFE6; padding:10px 18px;
+    border-radius:8px; font-size:13px; z-index:1300; opacity:0; pointer-events:none;
+    transition: opacity .25s ease, transform .25s ease;
+  }
+  .save-toast.show { opacity:1; transform:translate(-50%, 0); }
 </style>
 </head>
 <body>
@@ -790,6 +817,7 @@ ARMADA_HTML = """<!DOCTYPE html>
   {% endif %}
 </div>
 
+<div id="unitPanels">
 {% for group_name, group in grouped.items() %}
 <div class="panel">
   <h6>{{ group_name }}</h6>
@@ -817,20 +845,162 @@ ARMADA_HTML = """<!DOCTYPE html>
           <div class="link-box" id="link_{{ a.armada_id }}">{{ base_url }}api/track?armada_id={{ a.armada_id }}&amp;lat=%LAT&amp;lon=%LON&amp;speed=%SPD&amp;time=%TIME</div>
           <button class="btn btn-outline-light copy-btn mt-1" onclick="copyLink('{{ a.armada_id }}')">Copy</button>
         </td>
-        <td><a href="/armada/edit/{{ a.armada_id }}">Edit</a></td>
+        <td>
+          <button type="button" class="edit-btn"
+            data-armada-id="{{ a.armada_id }}"
+            data-nama="{{ a.nama or '' }}"
+            data-nopol="{{ a.nopol or '' }}"
+            data-group-id="{{ a.group_id or '' }}"
+            data-status="{{ a.status_operasional or 'Aktif' }}"
+            data-tujuan="{{ a.tujuan_zona_id or '' }}">Edit</button>
+        </td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
 </div>
 {% endfor %}
+</div>
+
+<!-- ---------- Drawer edit unit (geser dari kanan) ---------- -->
+<div class="edit-drawer-backdrop" id="editDrawerBackdrop"></div>
+<div class="edit-drawer" id="editDrawer">
+  <div class="edit-drawer-header">
+    <h5>Edit Unit: <span id="editDrawerId"></span></h5>
+    <button type="button" class="edit-drawer-close" id="editDrawerCloseBtn"><i class="bi bi-x-lg"></i></button>
+  </div>
+  <form id="editDrawerForm">
+    <div class="mb-2">
+      <label class="form-label">Nama supir/keterangan</label>
+      <input type="text" name="nama" id="editNama" class="form-control">
+    </div>
+    <div class="mb-2">
+      <label class="form-label">Nomor polisi</label>
+      <input type="text" name="nopol" id="editNopol" class="form-control">
+    </div>
+    <div class="mb-2">
+      <label class="form-label">Armada</label>
+      <select name="group_id" id="editGroupId" class="form-select">
+        <option value="">Belum di-assign ke Armada manapun</option>
+        {% for grp in armada_groups %}
+        <option value="{{ grp.group_id }}">{{ grp.nama }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="mb-2">
+      <label class="form-label">Status operasional</label>
+      <select name="status_operasional" id="editStatus" class="form-select">
+        <option value="Aktif">Aktif</option>
+        <option value="Reparasi">Reparasi</option>
+        <option value="Istirahat">Istirahat</option>
+        <option value="Tiba di Tujuan">Tiba di Tujuan</option>
+        <option value="Siap Trip Baru">Siap Trip Baru</option>
+      </select>
+      <div class="form-text" style="color:#8A8276; font-size:11px;">Status "Tiba di Tujuan" otomatis diset sistem ketika Unit memasuki geofence tujuan terjadwal.</div>
+    </div>
+    <div class="mb-3">
+      <label class="form-label">Jadwal tujuan (gudang/zona)</label>
+      <select name="tujuan_zona_id" id="editTujuan" class="form-select">
+        <option value="">Tidak ada jadwal tujuan</option>
+      </select>
+    </div>
+    <button type="submit" class="btn btn-primary w-100">Simpan Perubahan</button>
+  </form>
+</div>
+
+<div class="save-toast" id="saveToast"></div>
 
 <script>
+let zonaOptionsLoaded = false;
+const editDrawer = document.getElementById('editDrawer');
+const editDrawerBackdrop = document.getElementById('editDrawerBackdrop');
+const editDrawerForm = document.getElementById('editDrawerForm');
+
 function copyLink(armadaId) {
   const text = document.getElementById('link_' + armadaId).textContent;
   navigator.clipboard.writeText(text);
   alert('Link disalin untuk ' + armadaId);
 }
+
+function showToast(msg) {
+  const t = document.getElementById('saveToast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2600);
+}
+
+// Zona buat dropdown tujuan diambil sekali lewat API yang sudah ada (/api/zona), gak nambah endpoint baru
+async function ensureZonaOptions() {
+  if (zonaOptionsLoaded) return;
+  try {
+    const res = await fetch('/api/zona');
+    const zonas = await res.json();
+    const sel = document.getElementById('editTujuan');
+    zonas.forEach(z => {
+      const opt = document.createElement('option');
+      opt.value = z.zona_id;
+      opt.textContent = z.nama;
+      sel.appendChild(opt);
+    });
+    zonaOptionsLoaded = true;
+  } catch (err) {
+    console.error('Gagal memuat daftar zona', err);
+  }
+}
+
+function openEditDrawer(btn) {
+  editDrawerForm.dataset.armadaId = btn.dataset.armadaId;
+  document.getElementById('editDrawerId').textContent = btn.dataset.armadaId;
+  document.getElementById('editNama').value = btn.dataset.nama;
+  document.getElementById('editNopol').value = btn.dataset.nopol;
+  document.getElementById('editGroupId').value = btn.dataset.groupId;
+  document.getElementById('editStatus').value = btn.dataset.status;
+  ensureZonaOptions().then(() => { document.getElementById('editTujuan').value = btn.dataset.tujuan; });
+  editDrawer.classList.add('open');
+  editDrawerBackdrop.classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeEditDrawer() {
+  editDrawer.classList.remove('open');
+  editDrawerBackdrop.classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+// Event delegation: satu listener buat semua tombol Edit, termasuk yang muncul lagi setelah refresh parsial
+document.getElementById('unitPanels').addEventListener('click', (e) => {
+  const btn = e.target.closest('.edit-btn');
+  if (btn) openEditDrawer(btn);
+});
+document.getElementById('editDrawerCloseBtn').addEventListener('click', closeEditDrawer);
+editDrawerBackdrop.addEventListener('click', closeEditDrawer);
+
+// Submit lewat fetch ke route /armada/edit/<id> yang sudah ada -- tanpa reload halaman.
+// Route itu redirect ke /armada; fetch otomatis ikutin redirect-nya, lalu kita comot cuma
+// bagian #unitPanels dari HTML hasilnya buat nge-update tabel di halaman ini secara parsial.
+editDrawerForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const armadaId = editDrawerForm.dataset.armadaId;
+  const fd = new FormData(editDrawerForm);
+  const submitBtn = editDrawerForm.querySelector('button[type="submit"]');
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Menyimpan...';
+  try {
+    const res = await fetch('/armada/edit/' + encodeURIComponent(armadaId), { method: 'POST', body: fd });
+    if (!res.ok) throw new Error('Request gagal');
+    const html = await res.text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const newPanels = doc.getElementById('unitPanels');
+    if (newPanels) document.getElementById('unitPanels').innerHTML = newPanels.innerHTML;
+    closeEditDrawer();
+    showToast('Unit "' + armadaId + '" berhasil diperbarui.');
+  } catch (err) {
+    alert('Gagal menyimpan perubahan. Coba lagi.');
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Simpan Perubahan';
+  }
+});
 </script>
 </body>
 </html>"""
@@ -1927,11 +2097,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
 <div class="sidebar">
   <div class="nav-section-title">Menu</div>
-  <a href="#panel-peta" class="nav-link active" style="text-decoration:none;"><i class="bi bi-map"></i> Peta &amp; Armada</a>
+  <a href="#" id="navPetaArmada" class="nav-link active" style="text-decoration:none;"><i class="bi bi-map"></i> Peta &amp; Armada</a>
   {% if role == 'admin' %}
   <a href="/zona" class="nav-link" style="text-decoration:none;"><i class="bi bi-geo-alt"></i> Zona Geofence</a>
   {% endif %}
-  <a href="#panel-event" class="nav-link" style="text-decoration:none;"><i class="bi bi-clock-history"></i> Riwayat Event</a>
   <a href="/voyage" class="nav-link" style="text-decoration:none;"><i class="bi bi-signpost-split"></i> Riwayat Voyage</a>
   {% if role == 'admin' %}
   <div class="nav-section-title">Admin</div>
@@ -1939,6 +2108,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <a href="/users" class="nav-link" style="text-decoration:none;"><i class="bi bi-people"></i> Kelola User</a>
   {% endif %}
 </div>
+<!-- Catatan: "Riwayat Event" sengaja gak dobel di sini -- udah bisa diakses lewat tab
+     "Riwayat Event" di dalam panel armada (kanan/drawer), biar cuma ada satu jalan ke situ. -->
 
 <div class="main-content" id="panel-peta">
 
@@ -2294,14 +2465,24 @@ const drawerBackdrop = document.getElementById('drawerBackdrop');
 function openDrawer() {
   vehSidebarEl.classList.add('drawer-open');
   drawerBackdrop.classList.add('open');
+  document.body.style.overflow = 'hidden'; // kunci scroll body pas drawer kebuka (mobile)
 }
 function closeDrawer() {
   vehSidebarEl.classList.remove('drawer-open');
   drawerBackdrop.classList.remove('open');
+  document.body.style.overflow = '';
 }
 document.getElementById('fabVehList').addEventListener('click', openDrawer);
 document.getElementById('drawerCloseBtn').addEventListener('click', closeDrawer);
 drawerBackdrop.addEventListener('click', closeDrawer);
+
+// ---------- Nav "Peta & Armada" di sidebar kiri: satu-satunya jalan balik ke tampilan peta ----------
+document.getElementById('navPetaArmada').addEventListener('click', (e) => {
+  e.preventDefault();
+  closeDrawer(); // kalau drawer armada lagi kebuka di mobile, tutup dan balik fokus ke peta
+  document.querySelector('.veh-tab[data-tab="armada"]').click(); // pastikan tab aktifnya "Armada"
+  map.invalidateSize();
+});
 
 // swipe ke bawah pada handle buat nutup drawer
 let drawerTouchStartY = null;
