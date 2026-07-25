@@ -1563,10 +1563,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css"/>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.css"/>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.Default.css"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.js"></script>
 <style>
   :root {
     --sidebar-w: 220px;
+    --veh-sidebar-w: 340px;
     --navbar-h: 56px;
     --bg-main: #1C1A17;
     --bg-panel: #252220;
@@ -1594,9 +1598,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
   .topnav .brand { font-weight: 600; font-size: 16px; color: var(--text-main); display:flex; align-items:center; gap:8px; }
   .topnav .brand i { color: var(--accent); }
-  .topnav .status-pill { font-size: 12px; color: var(--text-dim); }
+  .topnav .status-pill { font-size: 12px; color: var(--text-dim); display:flex; align-items:center; gap:6px; }
+  .topnav .status-dot { width:7px; height:7px; border-radius:50%; background:#6BB689; display:inline-block; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.35; } }
 
-  /* ---------- SIDEBAR ---------- */
+  /* ---------- SIDEBAR NAVIGASI (kiri) ---------- */
   /* GANTI BAGIAN INI kalau mau pakai markup sidebar dari template Laravel lu */
   .sidebar {
     width: var(--sidebar-w);
@@ -1608,6 +1614,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     border-right: 1px solid var(--border-c);
     padding: 16px 0;
     overflow-y: auto;
+    z-index: 900;
   }
   .sidebar .nav-link {
     color: var(--text-dim);
@@ -1632,34 +1639,140 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     padding: 14px 20px 6px;
   }
 
-  /* ---------- MAIN CONTENT ---------- */
+  /* ---------- MAIN CONTENT: fullscreen map + vehicle sidebar ---------- */
   .main-content {
     margin-left: var(--sidebar-w);
     margin-top: var(--navbar-h);
-    padding: 20px;
+    height: calc(100vh - var(--navbar-h));
+    display: flex;
+    overflow: hidden;
   }
-  .panel {
+
+  .map-wrap {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  #map { height: 100%; width: 100%; }
+
+  .map-controls {
+    position: absolute;
+    top: 12px; right: 12px;
+    z-index: 500;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .map-ctrl-btn {
     background: var(--bg-panel);
     border: 1px solid var(--border-c);
-    border-radius: 8px;
-    padding: 16px;
-    margin-bottom: 20px;
+    color: var(--text-main);
+    width: 34px; height: 34px;
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
   }
-  .panel-title {
-    font-size: 13px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-dim);
-    margin-bottom: 12px;
-  }
-  #map { height: 420px; width: 100%; border-radius: 6px; }
+  .map-ctrl-btn:hover { background: var(--bg-panel-2); }
+  .map-ctrl-btn.toggled-off { color: var(--text-dim); opacity: 0.55; }
 
-  table { width:100%; border-collapse: collapse; font-size: 13px; color: var(--text-main); }
-  th, td { text-align:left; padding: 8px 10px; border-bottom: 1px solid var(--border-c); }
-  th { color:var(--text-dim); font-weight:500; text-transform:uppercase; font-size:11px; }
-  .badge-zone { padding:2px 8px; border-radius:4px; font-size:11px; }
+  /* ---------- Marker cluster theming (biar nyatu sama dark theme) ---------- */
+  .marker-cluster-small, .marker-cluster-medium, .marker-cluster-large {
+    background-color: rgba(255,106,26,0.25);
+  }
+  .marker-cluster-small div, .marker-cluster-medium div, .marker-cluster-large div {
+    background-color: var(--accent);
+    color: #1C1A17;
+    font-weight: 700;
+  }
+
+  /* ---------- VEHICLE SIDEBAR (kanan) ---------- */
+  .veh-sidebar {
+    width: var(--veh-sidebar-w);
+    flex: 0 0 var(--veh-sidebar-w);
+    background: var(--bg-panel);
+    border-left: 1px solid var(--border-c);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    padding: 14px;
+    border-bottom: 1px solid var(--border-c);
+  }
+  .stat-box {
+    background: var(--bg-panel-2);
+    border: 1px solid var(--border-c);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .stat-box .stat-val { font-size: 20px; font-weight: 700; line-height:1.1; }
+  .stat-box .stat-label { font-size: 11px; color: var(--text-dim); text-transform:uppercase; letter-spacing:0.04em; margin-top:4px; }
+
+  .veh-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border-c);
+    flex: 0 0 auto;
+  }
+  .veh-tab {
+    flex: 1;
+    text-align: center;
+    padding: 10px 0;
+    font-size: 12px;
+    color: var(--text-dim);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    user-select: none;
+  }
+  .veh-tab.active { color: var(--text-main); border-bottom-color: var(--accent); }
+
+  .veh-list, .event-list {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 10px;
+  }
+  .event-list { display: none; }
+
+  .veh-card {
+    background: var(--bg-panel-2);
+    border: 1px solid var(--border-c);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: border-color 0.15s ease;
+  }
+  .veh-card:hover { border-color: var(--accent); }
+  .veh-card.selected { border-color: var(--accent); background: rgba(255,106,26,0.08); }
+  .veh-card-top { display:flex; align-items:center; justify-content:space-between; margin-bottom:4px; }
+  .veh-card-id { font-weight:600; font-size:13px; display:flex; align-items:center; gap:6px; }
+  .online-dot { width:8px; height:8px; border-radius:50%; flex:0 0 auto; }
+  .online-dot.online { background:#6BB689; }
+  .online-dot.warning { background:#E3AC44; }
+  .online-dot.offline { background:#C97A6D; }
+  .veh-card-meta { font-size:11px; color:var(--text-dim); display:flex; justify-content:space-between; margin-top:6px; }
+  .veh-card .badge-zone { padding:2px 8px; border-radius:4px; font-size:11px; }
   .in-zone { background: rgba(107,182,137,0.15); color:#6BB689; }
   .out-zone { background: rgba(138,130,118,0.15); color:#8A8276; }
+  .no-data { color: var(--text-dim); font-size:12px; text-align:center; padding:20px 8px; }
+
+  .event-row { font-size:12px; padding:8px 6px; border-bottom:1px solid var(--border-c); }
+  .event-row .ev-armada { font-weight:600; }
+  .event-row .ev-time { color: var(--text-dim); font-size:11px; margin-top:2px; }
+
+  .popup-title { font-weight:700; font-size:13px; margin-bottom:4px; }
+  .popup-row { font-size:12px; margin-top:2px; }
+  .popup-row .lbl { color:#8A8276; }
+
+  @media (max-width: 992px) {
+    .main-content { flex-direction: column; height: auto; overflow: visible; }
+    .map-wrap { height: 55vh; }
+    .veh-sidebar { width: 100%; flex-basis: auto; border-left: none; border-top: 1px solid var(--border-c); }
+    .veh-list, .event-list { max-height: 340px; }
+  }
 
   @media (max-width: 768px) {
     .sidebar { display:none; }
@@ -1672,7 +1785,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <div class="topnav">
   <div class="brand"><i class="bi bi-truck"></i> Fleet Tracker</div>
   <div style="display:flex; align-items:center; gap:16px;">
-    <div class="status-pill" id="lastRefresh">Memuat...</div>
+    <div class="status-pill"><span class="status-dot"></span><span id="lastRefresh">Memuat...</span></div>
     <div style="font-size:13px; color:#B8AFA1;">
       {{ username }} <span style="background:#2D2A25; padding:2px 8px; border-radius:4px; font-size:11px; margin-left:4px;">{{ role }}</span>
     </div>
@@ -1695,41 +1808,127 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   {% endif %}
 </div>
 
-<div class="main-content">
+<div class="main-content" id="panel-peta">
 
-  <div class="panel" id="panel-peta">
-    <div class="panel-title">Peta live armada</div>
+  <div class="map-wrap" id="mapWrap">
     <div id="map"></div>
+    <div class="map-controls">
+      <div class="map-ctrl-btn" id="fullscreenBtn" title="Fullscreen peta">
+        <i class="bi bi-arrows-fullscreen" id="fullscreenIcon"></i>
+      </div>
+      <div class="map-ctrl-btn" id="geofenceBtn" title="Tampilkan/sembunyikan geofence">
+        <i class="bi bi-geo-alt" id="geofenceIcon"></i>
+      </div>
+      <div class="map-ctrl-btn" id="fitAllBtn" title="Fit semua armada">
+        <i class="bi bi-fullscreen"></i>
+      </div>
+    </div>
   </div>
 
-  <div class="panel">
-    <div class="panel-title">Status armada</div>
-    <table id="armadaTable"><thead><tr><th>Unit</th><th>Armada</th><th>Zona</th><th>Status</th><th>Rute</th><th>Update terakhir</th></tr></thead><tbody></tbody></table>
-  </div>
+  <div class="veh-sidebar" id="panel-event">
+    <div class="stats-grid" id="statsGrid">
+      <div class="stat-box"><div class="stat-val" id="statTotal">0</div><div class="stat-label">Total Unit</div></div>
+      <div class="stat-box"><div class="stat-val" id="statBergerak">0</div><div class="stat-label">Bergerak</div></div>
+      <div class="stat-box"><div class="stat-val" id="statZona">0</div><div class="stat-label">Di Dalam Zona</div></div>
+      <div class="stat-box"><div class="stat-val" id="statTiba">0</div><div class="stat-label">Tiba Tujuan</div></div>
+    </div>
 
-  <div class="panel" id="panel-event">
-    <div class="panel-title">Event geofence terbaru</div>
-    <table id="eventTable"><thead><tr><th>Armada</th><th>Event</th><th>Waktu</th></tr></thead><tbody></tbody></table>
+    <div class="veh-tabs">
+      <div class="veh-tab active" data-tab="armada">Armada</div>
+      <div class="veh-tab" data-tab="event">Riwayat Event</div>
+    </div>
+
+    <div class="veh-list" id="vehList">
+      <div class="no-data">Memuat data armada...</div>
+    </div>
+
+    <div class="event-list" id="eventListWrap">
+      <div class="no-data">Memuat riwayat event...</div>
+    </div>
   </div>
 
 </div>
 
 <script>
-const map = L.map('map').setView([-6.9, 107.3], 9);
+const map = L.map('map', { zoomControl: true }).setView([-6.9, 107.3], 9);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
 
 const markers = {};
 const zoneCircles = [];
+const zoneLayerGroup = L.layerGroup(); // buat toggle show/hide semua geofence sekaligus
+const clusterGroup = L.markerClusterGroup({ maxClusterRadius: 50, spiderfyOnMaxZoom: true });
+map.addLayer(clusterGroup);
+map.addLayer(zoneLayerGroup); // geofence tampil default (bisa di-toggle lewat tombol)
 const trailLines = {}; // simpan polyline trail per armada_id, buat toggle show/hide
+let lastArmadaData = [];
+let selectedArmadaId = null;
+let geofenceVisible = true;
 
+// ---------- Waktu parsing ----------
+function parseWaktu(waktuStr) {
+  if (!waktuStr) return null;
+  let iso = waktuStr.includes('T') ? waktuStr : waktuStr.replace(' ', 'T');
+  if (!iso.endsWith('Z') && !iso.includes('+')) iso += 'Z'; // waktu tersimpan dalam UTC (server pakai datetime.utcnow())
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// ---------- Last seen (relative time) ----------
+function timeAgo(waktuStr) {
+  const then = parseWaktu(waktuStr);
+  if (!then) return waktuStr || 'Belum ada data';
+  const diffSec = Math.floor((Date.now() - then.getTime()) / 1000);
+  if (diffSec < 5) return 'baru saja';
+  if (diffSec < 60) return diffSec + ' detik lalu';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return diffMin + ' menit lalu';
+  const diffJam = Math.floor(diffMin / 60);
+  if (diffJam < 24) return diffJam + ' jam lalu';
+  const diffHari = Math.floor(diffJam / 24);
+  return diffHari + ' hari lalu';
+}
+
+// ---------- Status freshness: online <=30d, warning 31d-2m, offline >2m ----------
+function getFreshness(waktuStr) {
+  const then = parseWaktu(waktuStr);
+  if (!then) return 'offline';
+  const diffSec = (Date.now() - then.getTime()) / 1000;
+  if (diffSec <= 30) return 'online';
+  if (diffSec <= 120) return 'warning';
+  return 'offline';
+}
+
+// ---------- Warna marker berdasarkan status operasional armada ----------
+function getStatusColor(status) {
+  return {
+    'Reparasi': '#E08A6B',
+    'Istirahat': '#E3AC44',
+    'Tiba di Tujuan': '#6BCFE0',
+    'Siap Trip Baru': '#6BB689'
+  }[status] || '#6BB689';
+}
+
+function buildMarkerIcon(a) {
+  const color = getStatusColor(a.status_operasional);
+  const fresh = getFreshness(a.last_update);
+  const opacity = fresh === 'offline' ? 0.5 : 1;
+  return L.divIcon({
+    className: 'veh-marker-icon',
+    html: '<div style="width:18px; height:18px; border-radius:50%; background:' + color +
+      '; border:2px solid #1C1A17; box-shadow:0 0 0 1px ' + color + '; opacity:' + opacity + ';"></div>',
+    iconSize: [18, 18],
+    iconAnchor: [9, 9],
+    popupAnchor: [0, -9]
+  });
+}
+
+// ---------- Trail toggle ----------
 async function toggleTrail(armadaId) {
-  // Kalau trail lagi ditampilin, hilangkan (opsi hide)
   if (trailLines[armadaId]) {
     map.removeLayer(trailLines[armadaId]);
     delete trailLines[armadaId];
     return;
   }
-
   // Ambil histori posisi (sistem menyimpan sampai 200 titik terakhir, kurang lebih 1-2 hari tergantung interval kirim)
   const res = await fetch('/api/history/' + armadaId);
   const points = await res.json();
@@ -1737,81 +1936,139 @@ async function toggleTrail(armadaId) {
     alert('Belum ada histori posisi untuk unit ini.');
     return;
   }
-
   const latlngs = points.map(p => [p.lat, p.lon]).reverse(); // urutkan dari lama ke baru
   const line = L.polyline(latlngs, { color: '#FF6A1A', weight: 3, opacity: 0.7 }).addTo(map);
   trailLines[armadaId] = line;
   map.fitBounds(line.getBounds(), { maxZoom: 14 });
 }
 
+function focusArmada(armadaId) {
+  const a = lastArmadaData.find(x => x.armada_id === armadaId);
+  if (!a || !a.last_lat || !a.last_lon) return;
+  selectedArmadaId = armadaId;
+  map.flyTo([a.last_lat, a.last_lon], Math.max(map.getZoom(), 13), { duration: 0.6 });
+  if (markers[armadaId]) markers[armadaId].openPopup();
+  renderVehicleList(lastArmadaData);
+}
+
+// ---------- Popup content ----------
+function buildPopupHtml(a) {
+  const zoneLabel = a.last_zone_id
+    ? '<span class="badge-zone in-zone">' + a.last_zone_id + '</span>'
+    : '<span class="badge-zone out-zone">luar zona</span>';
+  let html = '<div class="popup-title"><i class="bi bi-truck"></i> ' + a.armada_id + '</div>';
+  html += '<div class="popup-row"><span class="lbl">Armada:</span> ' + (a.group_nama || '-') + '</div>';
+  html += '<div class="popup-row"><span class="lbl">Status:</span> ' + (a.status_operasional || 'Aktif') + '</div>';
+  html += '<div class="popup-row"><span class="lbl">Zona:</span> ' + zoneLabel + '</div>';
+  html += '<div class="popup-row"><span class="lbl">Update:</span> ' + timeAgo(a.last_update) + '</div>';
+  if (a.tujuan_nama) {
+    html += '<div class="popup-row"><span class="lbl">Tujuan:</span> ' + a.tujuan_nama + '</div>';
+    if (a.eta && a.eta.eta_jam !== null) {
+      const jam = Math.floor(a.eta.eta_jam);
+      const menit = Math.round((a.eta.eta_jam - jam) * 60);
+      html += '<div class="popup-row"><span class="lbl">ETA:</span> ' + a.eta.jarak_km + ' km &middot; ~' + jam + 'j ' + menit + 'm</div>';
+    }
+  }
+  html += '<div style="margin-top:6px; font-size:11px; color:#8A8276;">klik marker lagi untuk lihat/sembunyikan jejak rute</div>';
+  return html;
+}
+
 async function loadZones() {
   const res = await fetch('/api/zona');
   const zones = await res.json();
-  zoneCircles.forEach(c => map.removeLayer(c));
+  zoneLayerGroup.clearLayers();
+  zoneCircles.length = 0;
   zones.forEach(z => {
     const c = L.circle([z.lat, z.lon], { radius: z.radius_meter, color: '#FF6A1A', weight: 1, fillOpacity: 0.08 })
-      .addTo(map).bindPopup(z.nama);
+      .bindPopup(z.nama);
+    zoneLayerGroup.addLayer(c);
     zoneCircles.push(c);
+  });
+  if (geofenceVisible && !map.hasLayer(zoneLayerGroup)) map.addLayer(zoneLayerGroup);
+}
+
+// ---------- Live statistics ----------
+function renderStats(list) {
+  const total = list.length;
+  const bergerak = list.filter(a => (a.last_speed || 0) > 0).length;
+  const diZona = list.filter(a => a.last_zone_id).length;
+  const tiba = list.filter(a => a.status_operasional === 'Tiba di Tujuan').length;
+  document.getElementById('statTotal').textContent = total;
+  document.getElementById('statBergerak').textContent = bergerak;
+  document.getElementById('statZona').textContent = diZona;
+  document.getElementById('statTiba').textContent = tiba;
+}
+
+// ---------- Vehicle sidebar list ----------
+function renderVehicleList(list) {
+  const wrap = document.getElementById('vehList');
+  if (!list.length) {
+    wrap.innerHTML = '<div class="no-data">Belum ada unit terdaftar.</div>';
+    return;
+  }
+  wrap.innerHTML = '';
+  list.forEach(a => {
+    const fresh = getFreshness(a.last_update); // 'online' | 'warning' | 'offline'
+    const zoneLabel = a.last_zone_id
+      ? '<span class="badge-zone in-zone">' + a.last_zone_id + '</span>'
+      : '<span class="badge-zone out-zone">luar zona</span>';
+    const card = document.createElement('div');
+    card.className = 'veh-card' + (a.armada_id === selectedArmadaId ? ' selected' : '');
+    card.innerHTML =
+      '<div class="veh-card-top">' +
+        '<div class="veh-card-id"><span class="online-dot ' + fresh + '" title="' + fresh + '"></span>' + a.armada_id + '</div>' +
+        zoneLabel +
+      '</div>' +
+      '<div style="font-size:11px; color:var(--text-dim);">' + (a.group_nama || 'Belum di-assign') + ' &middot; ' + (a.status_operasional || 'Aktif') + '</div>' +
+      '<div class="veh-card-meta"><span><i class="bi bi-clock-history"></i> ' + timeAgo(a.last_update) + '</span>' +
+      (a.last_speed ? '<span>' + Math.round(a.last_speed) + ' km/j</span>' : '<span>diam</span>') + '</div>';
+    card.addEventListener('click', () => focusArmada(a.armada_id));
+    wrap.appendChild(card);
   });
 }
 
 async function loadArmada() {
   const res = await fetch('/api/armada');
   const list = await res.json();
-  const tbody = document.querySelector('#armadaTable tbody');
-  tbody.innerHTML = '';
+  lastArmadaData = list;
+
   list.forEach(a => {
     if (a.last_lat && a.last_lon) {
       const pos = [a.last_lat, a.last_lon];
+      const popupHtml = buildPopupHtml(a);
+      const icon = buildMarkerIcon(a);
       if (markers[a.armada_id]) {
         markers[a.armada_id].setLatLng(pos);
+        markers[a.armada_id].setPopupContent(popupHtml);
+        markers[a.armada_id].setIcon(icon);
       } else {
-        const marker = L.marker(pos).addTo(map).bindPopup(a.armada_id + ' -- klik marker untuk lihat/sembunyikan jejak rute');
+        const marker = L.marker(pos, { icon }).bindPopup(popupHtml);
         marker.on('click', () => toggleTrail(a.armada_id));
+        clusterGroup.addLayer(marker);
         markers[a.armada_id] = marker;
       }
     }
-    const zoneLabel = a.last_zone_id
-      ? '<span class="badge-zone in-zone">' + a.last_zone_id + '</span>'
-      : '<span class="badge-zone out-zone">luar zona</span>';
-
-    const statusColor = {
-      'Reparasi': '#E08A6B', 'Istirahat': '#E3AC44', 'Tiba di Tujuan': '#6BCFE0', 'Siap Trip Baru': '#6BB689'
-    }[a.status_operasional] || '#6BB689';
-    const statusLabel = '<span style="color:' + statusColor + '; font-size:12px;">' + (a.status_operasional || 'Aktif') + '</span>';
-
-    let ruteLabel = '-';
-    if (a.tujuan_lat && a.tujuan_lon && a.last_lat && a.last_lon) {
-      const gmapsUrl = 'https://www.google.com/maps/dir/?api=1&origin=' + a.last_lat + ',' + a.last_lon +
-        '&destination=' + a.tujuan_lat + ',' + a.tujuan_lon;
-      ruteLabel = '<a href="' + gmapsUrl + '" target="_blank" style="font-size:12px;">' +
-        '<i class="bi bi-signpost-2"></i> ke ' + a.tujuan_nama + '</a>';
-
-      if (a.eta) {
-        if (a.eta.eta_jam !== null) {
-          const jam = Math.floor(a.eta.eta_jam);
-          const menit = Math.round((a.eta.eta_jam - jam) * 60);
-          ruteLabel += '<br><span style="font-size:11px; color:#8A8276;">' +
-            a.eta.jarak_km + ' km &middot; ETA ~' + jam + 'j ' + menit + 'm</span>';
-        } else {
-          ruteLabel += '<br><span style="font-size:11px; color:#8A8276;">' +
-            a.eta.jarak_km + ' km &middot; unit sedang diam</span>';
-        }
-      }
-    }
-
-    tbody.innerHTML += '<tr><td>' + a.armada_id + '</td><td>' + (a.group_nama || '-') + '</td><td>' + zoneLabel +
-      '</td><td>' + statusLabel + '</td><td>' + ruteLabel + '</td><td>' + (a.last_update || '-') + '</td></tr>';
   });
+
+  renderStats(list);
+  renderVehicleList(list);
 }
 
 async function loadEvents() {
   const res = await fetch('/api/events');
   const list = await res.json();
-  const tbody = document.querySelector('#eventTable tbody');
-  tbody.innerHTML = '';
+  const wrap = document.getElementById('eventListWrap');
+  if (!list.length) {
+    wrap.innerHTML = '<div class="no-data">Belum ada event geofence.</div>';
+    return;
+  }
+  wrap.innerHTML = '';
   list.forEach(e => {
-    tbody.innerHTML += '<tr><td>' + e.armada_id + '</td><td>' + e.jenis_event + ' ' + e.nama_zona + '</td><td>' + e.waktu + '</td></tr>';
+    const row = document.createElement('div');
+    row.className = 'event-row';
+    row.innerHTML = '<div class="ev-armada">' + e.armada_id + ' &middot; ' + e.jenis_event + ' ' + e.nama_zona + '</div>' +
+      '<div class="ev-time">' + timeAgo(e.waktu) + '</div>';
+    wrap.appendChild(row);
   });
 }
 
@@ -1820,6 +2077,54 @@ function refreshAll() {
   loadEvents();
   document.getElementById('lastRefresh').textContent = 'Update terakhir: ' + new Date().toLocaleTimeString('id-ID');
 }
+
+// ---------- Tabs (Armada / Riwayat Event) ----------
+document.querySelectorAll('.veh-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.veh-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    const isEvent = tab.dataset.tab === 'event';
+    document.getElementById('vehList').style.display = isEvent ? 'none' : 'block';
+    document.getElementById('eventListWrap').style.display = isEvent ? 'block' : 'none';
+  });
+});
+
+// ---------- Fullscreen peta ----------
+const mapWrap = document.getElementById('mapWrap');
+document.getElementById('fullscreenBtn').addEventListener('click', () => {
+  if (!document.fullscreenElement) {
+    mapWrap.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen();
+  }
+});
+document.addEventListener('fullscreenchange', () => {
+  const icon = document.getElementById('fullscreenIcon');
+  icon.className = document.fullscreenElement ? 'bi bi-fullscreen-exit' : 'bi bi-arrows-fullscreen';
+  setTimeout(() => map.invalidateSize(), 150);
+});
+window.addEventListener('resize', () => map.invalidateSize());
+
+// ---------- Toggle visibility geofence ----------
+document.getElementById('geofenceBtn').addEventListener('click', () => {
+  geofenceVisible = !geofenceVisible;
+  const btn = document.getElementById('geofenceBtn');
+  if (geofenceVisible) {
+    map.addLayer(zoneLayerGroup);
+    btn.classList.remove('toggled-off');
+  } else {
+    map.removeLayer(zoneLayerGroup);
+    btn.classList.add('toggled-off');
+  }
+});
+
+// ---------- Fit all vehicles ----------
+document.getElementById('fitAllBtn').addEventListener('click', () => {
+  const withPos = lastArmadaData.filter(a => a.last_lat && a.last_lon);
+  if (!withPos.length) return;
+  const bounds = L.latLngBounds(withPos.map(a => [a.last_lat, a.last_lon]));
+  map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
+});
 
 loadZones();
 refreshAll();
