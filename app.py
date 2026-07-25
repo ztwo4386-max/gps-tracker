@@ -245,6 +245,7 @@ LOGIN_HTML = """<!DOCTYPE html>
     background:#2D2A25; border:1px solid #423D36; color:#F3EFE6;
   }
   .form-control:focus { background:#2D2A25; color:#F3EFE6; border-color:#FF6A1A; box-shadow:none; }
+  .form-control::placeholder { color:#6B6459; opacity:1; }
   .btn-primary { background:#FF6A1A; border-color:#FF6A1A; }
   .btn-primary:hover { background:#C8500F; border-color:#C8500F; }
   .alert-danger { font-size: 13px; }
@@ -325,6 +326,7 @@ USERS_HTML = """<!DOCTYPE html>
   .panel { background:#252220; border:1px solid #423D36; border-radius:8px; padding:20px; max-width:600px; margin-bottom:20px; }
   .form-control, .form-select { background:#2D2A25; border:1px solid #423D36; color:#F3EFE6; }
   .form-control:focus, .form-select:focus { background:#2D2A25; color:#F3EFE6; border-color:#FF6A1A; box-shadow:none; }
+  .form-control::placeholder { color:#6B6459; opacity:1; }
   .btn-primary { background:#FF6A1A; border-color:#FF6A1A; }
   table { width:100%; font-size:13px; }
   th, td { padding:8px; border-bottom:1px solid #423D36; }
@@ -415,6 +417,7 @@ EDIT_USER_HTML = """<!DOCTYPE html>
   .panel { background:#252220; border:1px solid #423D36; border-radius:8px; padding:20px; max-width:500px; }
   .form-control, .form-select { background:#2D2A25; border:1px solid #423D36; color:#F3EFE6; }
   .form-control:focus, .form-select:focus { background:#2D2A25; color:#F3EFE6; border-color:#FF6A1A; box-shadow:none; }
+  .form-control::placeholder { color:#6B6459; opacity:1; }
   .btn-primary { background:#FF6A1A; border-color:#FF6A1A; }
   a { color:#FF6A1A; }
 </style>
@@ -688,6 +691,7 @@ ARMADA_HTML = """<!DOCTYPE html>
   .panel { background:#252220; border:1px solid #423D36; border-radius:8px; padding:20px; max-width:960px; margin-bottom:20px; }
   .form-control, .form-select { background:#2D2A25; border:1px solid #423D36; color:#F3EFE6; }
   .form-control:focus, .form-select:focus { background:#2D2A25; color:#F3EFE6; border-color:#FF6A1A; box-shadow:none; }
+  .form-control::placeholder { color:#6B6459; opacity:1; }
   .btn-primary { background:#FF6A1A; border-color:#FF6A1A; }
   table { width:100%; font-size:13px; }
   th, td { padding:8px; border-bottom:1px solid #423D36; vertical-align:middle; }
@@ -698,6 +702,7 @@ ARMADA_HTML = """<!DOCTYPE html>
   }
   .copy-btn { font-size:11px; padding:2px 8px; }
   .form-text { color:#8A8276; font-size:12px; }
+  label.form-label { font-size:12px; color:#B8AFA1; }
 </style>
 </head>
 <body>
@@ -712,12 +717,14 @@ ARMADA_HTML = """<!DOCTYPE html>
   <p class="form-text">Armada adalah level pengelompokan atas, misal "Armada Jawa" atau "Armada Sumatra". Setiap Unit (truk) nantinya harus terdaftar di salah satu Armada.</p>
   <form method="POST" action="/armada-group/create" class="row g-2 mb-3">
     <div class="col-md-4">
-      <input type="text" name="group_id" class="form-control" placeholder="Kode Armada, cth: ARM-JAWA" required>
+      <label class="form-label">Kode Armada</label>
+      <input type="text" name="group_id" class="form-control" placeholder="cth: ARM-JAWA" required>
     </div>
     <div class="col-md-4">
-      <input type="text" name="nama" class="form-control" placeholder="Nama Armada, cth: Armada Jawa" required>
+      <label class="form-label">Nama Armada</label>
+      <input type="text" name="nama" class="form-control" placeholder="cth: Armada Jawa" required>
     </div>
-    <div class="col-md-2">
+    <div class="col-md-2 d-flex align-items-end">
       <button type="submit" class="btn btn-primary w-100">+ Tambah Armada</button>
     </div>
   </form>
@@ -756,15 +763,19 @@ ARMADA_HTML = """<!DOCTYPE html>
   </p>
   <form method="POST" action="/armada/create" class="row g-2">
     <div class="col-md-3">
-      <input type="text" name="armada_id" class="form-control" placeholder="Unit ID, cth: UNIT-001" required>
+      <label class="form-label">Unit ID</label>
+      <input type="text" name="armada_id" class="form-control" placeholder="cth: UNIT-001" required>
     </div>
     <div class="col-md-3">
-      <input type="text" name="nama" class="form-control" placeholder="Nama supir/keterangan">
+      <label class="form-label">Nama supir/keterangan</label>
+      <input type="text" name="nama" class="form-control" placeholder="cth: Budi">
     </div>
     <div class="col-md-2">
-      <input type="text" name="nopol" class="form-control" placeholder="Nopol">
+      <label class="form-label">Nopol</label>
+      <input type="text" name="nopol" class="form-control" placeholder="cth: B 1234 XY">
     </div>
     <div class="col-md-2">
+      <label class="form-label">Armada</label>
       <select name="group_id" class="form-select" required>
         <option value="" disabled selected>Pilih Armada</option>
         {% for grp in armada_groups %}
@@ -772,7 +783,7 @@ ARMADA_HTML = """<!DOCTYPE html>
         {% endfor %}
       </select>
     </div>
-    <div class="col-md-2">
+    <div class="col-md-2 d-flex align-items-end">
       <button type="submit" class="btn btn-primary w-100">+ Tambah Unit</button>
     </div>
   </form>
@@ -837,6 +848,7 @@ EDIT_ARMADA_HTML = """<!DOCTYPE html>
   .panel { background:#252220; border:1px solid #423D36; border-radius:8px; padding:20px; max-width:500px; }
   .form-control, .form-select { background:#2D2A25; border:1px solid #423D36; color:#F3EFE6; }
   .form-control:focus, .form-select:focus { background:#2D2A25; color:#F3EFE6; border-color:#FF6A1A; box-shadow:none; }
+  .form-control::placeholder { color:#6B6459; opacity:1; }
   .btn-primary { background:#FF6A1A; border-color:#FF6A1A; }
   a { color:#FF6A1A; }
 </style>
@@ -1047,6 +1059,7 @@ ZONA_HTML = """<!DOCTYPE html>
   .panel { background:#252220; border:1px solid #423D36; border-radius:8px; padding:20px; max-width:900px; margin-bottom:20px; }
   .form-control, .form-select { background:#2D2A25; border:1px solid #423D36; color:#F3EFE6; }
   .form-control:focus, .form-select:focus { background:#2D2A25; color:#F3EFE6; border-color:#FF6A1A; box-shadow:none; }
+  .form-control::placeholder { color:#6B6459; opacity:1; }
   .btn-primary { background:#FF6A1A; border-color:#FF6A1A; }
   .btn-primary:disabled { background:#5A534A; border-color:#5A534A; }
   table { width:100%; font-size:13px; }
@@ -1200,6 +1213,7 @@ EDIT_ZONA_HTML = """<!DOCTYPE html>
   .panel { background:#252220; border:1px solid #423D36; border-radius:8px; padding:20px; max-width:600px; }
   .form-control { background:#2D2A25; border:1px solid #423D36; color:#F3EFE6; }
   .form-control:focus { background:#2D2A25; color:#F3EFE6; border-color:#FF6A1A; box-shadow:none; }
+  .form-control::placeholder { color:#6B6459; opacity:1; }
   .btn-primary { background:#FF6A1A; border-color:#FF6A1A; }
   a { color:#FF6A1A; }
   label.form-label { font-size:12px; color:#B8AFA1; }
