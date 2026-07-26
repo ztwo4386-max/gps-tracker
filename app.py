@@ -1728,7 +1728,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="id">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Fleet Tracker Dashboard</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
@@ -1749,6 +1749,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     --text-main: #F3EFE6;
     --text-dim: #B8AFA1;
     --accent: #FF6A1A;
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
   }
   body { margin:0; font-family: -apple-system, "Segoe UI", sans-serif; background:var(--bg-main); color:var(--text-main); }
 
@@ -1761,7 +1765,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 20px;
+    padding: 0 calc(20px + var(--safe-right)) 0 calc(20px + var(--safe-left));
     position: fixed;
     top: 0; left: 0; right: 0;
     z-index: 1000;
@@ -1771,6 +1775,31 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .topnav .status-pill { font-size: 12px; color: var(--text-dim); display:flex; align-items:center; gap:6px; }
   .topnav .status-dot { width:7px; height:7px; border-radius:50%; background:#6BB689; display:inline-block; animation: pulse 2s infinite; }
   @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.35; } }
+
+  /* ---------- Hamburger + nav drawer (cuma tampil di mobile) ---------- */
+  .hamburger-btn {
+    display: none;
+    width: 38px; height: 38px;
+    border-radius: 8px;
+    border: 1px solid var(--border-c);
+    background: var(--bg-panel-2);
+    color: var(--text-main);
+    align-items: center; justify-content: center;
+    font-size: 19px;
+    cursor: pointer;
+    flex: 0 0 auto;
+  }
+  .nav-drawer-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 1150;
+    opacity: 0;
+    transition: opacity 0.22s ease;
+  }
+  .nav-drawer-backdrop.open { display: block; opacity: 1; }
+
   /* ---------- SIDEBAR NAVIGASI (kiri) ---------- */
   /* GANTI BAGIAN INI kalau mau pakai markup sidebar dari template Laravel lu */
   .sidebar {
@@ -1938,35 +1967,42 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .leaflet-popup-content-wrapper { border-radius: 10px; max-width: 280px; }
   .leaflet-popup-content { margin: 10px 12px; }
 
-  /* ---------- Statistik horizontal untuk mobile (overlay di atas peta) ---------- */
+  /* ---------- Statistik horizontal untuk mobile (overlay tipis di atas peta) ---------- */
   .mobile-stats-strip {
     display: none;
     position: absolute;
-    top: 10px; left: 10px; right: 10px;
+    top: calc(10px + var(--safe-top));
+    left: calc(10px + var(--safe-left));
+    right: calc(10px + var(--safe-right));
     z-index: 480;
-    gap: 8px;
+    gap: 6px;
     overflow-x: auto;
+    overflow-y: hidden;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
+    box-sizing: border-box;
+    padding: 0 10px 0 0; /* padding kanan biar chip terakhir gak kepotong pas discroll abis */
   }
   .mobile-stats-strip::-webkit-scrollbar { display: none; }
   .mstat-chip {
     flex: 0 0 auto;
-    background: rgba(37,34,32,0.92);
-    border: 1px solid var(--border-c);
-    border-radius: 10px;
-    padding: 8px 14px;
-    min-width: 84px;
+    background: rgba(37,34,32,0.78);
+    border: 1px solid rgba(66,61,54,0.7);
+    border-radius: 8px;
+    padding: 6px 11px;
+    min-width: 70px;
     text-align: center;
+    box-sizing: border-box;
   }
-  .mstat-chip .mstat-val { display:block; font-size:18px; font-weight:700; line-height:1.1; }
-  .mstat-chip .mstat-label { display:block; font-size:11px; color:var(--text-dim); margin-top:2px; white-space:nowrap; }
+  .mstat-chip .mstat-val { display:block; font-size:15px; font-weight:700; line-height:1.1; }
+  .mstat-chip .mstat-label { display:block; font-size:10px; color:var(--text-dim); margin-top:1px; white-space:nowrap; }
 
   /* ---------- Tombol floating buat buka daftar armada (mobile) ---------- */
   .fab-vehlist {
     display: none;
     position: absolute;
-    bottom: 20px; right: 12px;
+    bottom: calc(20px + var(--safe-bottom));
+    right: calc(12px + var(--safe-right));
     z-index: 490;
     width: 56px; height: 56px;
     border-radius: 50%;
@@ -2023,16 +2059,37 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .stat-box .stat-val { font-size: 18px; }
   }
 
-  /* ---------- MOBILE (<=768px): sidebar navigasi disembunyikan, vehicle sidebar jadi drawer ---------- */
+  /* ---------- MOBILE (<=768px): hamburger buka nav drawer, vehicle sidebar jadi bottom-sheet drawer ---------- */
   @media (max-width: 768px) {
-    .sidebar { display:none; }
+    .hamburger-btn { display: flex; }
+
+    /* sidebar navigasi kiri jadi off-canvas drawer (bukan display:none lagi) supaya /zona, /voyage, /armada, /users tetap bisa diakses di mobile */
+    .sidebar {
+      transform: translateX(-100%);
+      transition: transform 0.25s ease;
+      z-index: 1250;
+      padding-left: var(--safe-left);
+      box-shadow: 6px 0 24px rgba(0,0,0,0.45);
+      max-width: 82vw;
+    }
+    .sidebar.mobile-open { transform: translateX(0); }
+
     .main-content { margin-left: 0; }
 
-    .mobile-stats-strip { display: flex; right: 64px; }
+    .mobile-stats-strip { display: flex; }
+
+    /* stats-grid desktop disembunyikan di mobile, digantikan mobile-stats-strip yang lebih ringan di atas peta */
+    .stats-grid { display: none; }
+
     .fab-vehlist { display: flex; }
 
-    /* stats-grid desktop disembunyikan di mobile, digantikan mobile-stats-strip di atas peta */
-    .stats-grid { display: none; }
+    /* kontrol peta dipindah ke kiri-bawah (thumb zone), FAB armada tetap kanan-bawah -- keduanya gampang dijangkau satu jempol */
+    .map-controls {
+      top: auto;
+      right: auto;
+      bottom: calc(20px + var(--safe-bottom));
+      left: calc(12px + var(--safe-left));
+    }
 
     .veh-sidebar {
       position: fixed;
@@ -2048,6 +2105,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       transform: translateY(100%);
       transition: transform 0.28s ease;
       z-index: 1200;
+      padding-bottom: var(--safe-bottom);
     }
     .veh-sidebar.drawer-open { transform: translateY(0); }
     .veh-sidebar-handle { display: block; }
@@ -2063,7 +2121,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .no-data { font-size: 13px; }
     .event-row { font-size: 13px; padding: 10px 6px; }
 
-    .topnav { padding: 0 12px; }
+    .topnav { padding: 0 calc(12px + var(--safe-right)) 0 calc(12px + var(--safe-left)); }
     .topnav .brand { font-size: 14px; }
     .topnav > div { gap: 10px !important; }
 
@@ -2077,15 +2135,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   @media (max-width: 360px) {
     .status-text { display: none; }
-    .mstat-chip { min-width: 74px; padding: 7px 10px; }
-    .fab-vehlist { width:52px; height:52px; bottom:16px; right:10px; }
+    .mstat-chip { min-width: 62px; padding: 5px 9px; }
+    .fab-vehlist { width:52px; height:52px; }
   }
 </style>
 </head>
 <body>
 
 <div class="topnav">
-  <div class="brand"><i class="bi bi-truck"></i> Fleet Tracker</div>
+  <div style="display:flex; align-items:center; gap:12px;">
+    <button class="hamburger-btn" id="hamburgerBtn" title="Menu navigasi"><i class="bi bi-list"></i></button>
+    <div class="brand"><i class="bi bi-truck"></i> Fleet Tracker</div>
+  </div>
   <div style="display:flex; align-items:center; gap:16px;">
     <div class="status-pill"><span class="status-dot"></span><span id="lastRefresh" class="status-text">Memuat...</span></div>
     <div class="user-info-text" style="font-size:13px; color:#B8AFA1;">
@@ -2094,6 +2155,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <a href="/logout" style="color:#B8AFA1; font-size:13px;"><i class="bi bi-box-arrow-right"></i> <span class="logout-text">Logout</span></a>
   </div>
 </div>
+
+<div class="nav-drawer-backdrop" id="navDrawerBackdrop"></div>
 
 <div class="sidebar">
   <div class="nav-section-title">Menu</div>
@@ -2109,7 +2172,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   {% endif %}
 </div>
 <!-- Catatan: "Riwayat Event" sengaja gak dobel di sini -- udah bisa diakses lewat tab
-     "Riwayat Event" di dalam panel armada (kanan/drawer), biar cuma ada satu jalan ke situ. -->
+     "Riwayat Event" di dalam panel armada (kanan/drawer), biar cuma ada satu jalan ke situ.
+     Di mobile, sidebar ini yang sama persis dipakai ulang sebagai nav drawer (hamburger),
+     jadi tetap cuma ada SATU sumber navigasi buat /zona, /voyage, /armada, /users. -->
 
 <div class="main-content" id="panel-peta">
 
@@ -2459,27 +2524,50 @@ document.getElementById('fitAllBtn').addEventListener('click', () => {
   map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
 });
 
+// ---------- Kunci scroll body kalau salah satu drawer (armada/nav) lagi kebuka ----------
+const sidebarEl = document.querySelector('.sidebar');
+function updateBodyScrollLock() {
+  const anyOpen = vehSidebarEl.classList.contains('drawer-open') || sidebarEl.classList.contains('mobile-open');
+  document.body.style.overflow = anyOpen ? 'hidden' : '';
+}
+
 // ---------- Drawer daftar armada (mobile) ----------
 const vehSidebarEl = document.getElementById('panel-event');
 const drawerBackdrop = document.getElementById('drawerBackdrop');
 function openDrawer() {
   vehSidebarEl.classList.add('drawer-open');
   drawerBackdrop.classList.add('open');
-  document.body.style.overflow = 'hidden'; // kunci scroll body pas drawer kebuka (mobile)
+  updateBodyScrollLock();
 }
 function closeDrawer() {
   vehSidebarEl.classList.remove('drawer-open');
   drawerBackdrop.classList.remove('open');
-  document.body.style.overflow = '';
+  updateBodyScrollLock();
 }
 document.getElementById('fabVehList').addEventListener('click', openDrawer);
 document.getElementById('drawerCloseBtn').addEventListener('click', closeDrawer);
 drawerBackdrop.addEventListener('click', closeDrawer);
 
+// ---------- Nav drawer (hamburger, mobile): reuse sidebar navigasi yang sama persis dengan desktop ----------
+const navDrawerBackdrop = document.getElementById('navDrawerBackdrop');
+function openNavDrawer() {
+  sidebarEl.classList.add('mobile-open');
+  navDrawerBackdrop.classList.add('open');
+  updateBodyScrollLock();
+}
+function closeNavDrawer() {
+  sidebarEl.classList.remove('mobile-open');
+  navDrawerBackdrop.classList.remove('open');
+  updateBodyScrollLock();
+}
+document.getElementById('hamburgerBtn').addEventListener('click', openNavDrawer);
+navDrawerBackdrop.addEventListener('click', closeNavDrawer);
+
 // ---------- Nav "Peta & Armada" di sidebar kiri: satu-satunya jalan balik ke tampilan peta ----------
 document.getElementById('navPetaArmada').addEventListener('click', (e) => {
   e.preventDefault();
   closeDrawer(); // kalau drawer armada lagi kebuka di mobile, tutup dan balik fokus ke peta
+  closeNavDrawer(); // kalau nav drawer lagi kebuka, tutup juga
   document.querySelector('.veh-tab[data-tab="armada"]').click(); // pastikan tab aktifnya "Armada"
   map.invalidateSize();
 });
@@ -2493,6 +2581,7 @@ vehSidebarHandle.addEventListener('touchmove', e => {
   if (e.touches[0].clientY - drawerTouchStartY > 60) { closeDrawer(); drawerTouchStartY = null; }
 }, { passive: true });
 vehSidebarHandle.addEventListener('touchend', () => { drawerTouchStartY = null; });
+
 
 loadZones();
 refreshAll();
