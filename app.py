@@ -2321,7 +2321,7 @@ async function toggleTrail(armadaId) {
     return;
   }
   // Ambil histori posisi (sistem menyimpan sampai 200 titik terakhir, kurang lebih 1-2 hari tergantung interval kirim)
-  const res = await fetch('/api/history/' + armadaId);
+  const res = await fetch('/api/history/' + armadaId, { cache: 'no-store' });
   const points = await res.json();
   if (!points.length) {
     alert('Belum ada histori posisi untuk unit ini.');
@@ -2366,7 +2366,7 @@ function buildPopupHtml(a) {
 }
 
 async function loadZones() {
-  const res = await fetch('/api/zona');
+  const res = await fetch('/api/zona', { cache: 'no-store' });
   const zones = await res.json();
   zoneLayerGroup.clearLayers();
   zoneCircles.length = 0;
@@ -2398,82 +2398,194 @@ function renderStats(list) {
 }
 
 // ---------- Vehicle sidebar list ----------
+// Simpan referensi elemen per armada_id biar tiap siklus refresh cukup UPDATE node yang
+// sudah ada (bukan innerHTML = '' + rebuild total), penting sekarang polling-nya tiap 1 detik.
+const vehCardEls = {};
+
 function renderVehicleList(list) {
   const wrap = document.getElementById('vehList');
   if (!list.length) {
     wrap.innerHTML = '<div class="no-data">Belum ada unit terdaftar.</div>';
+    Object.keys(vehCardEls).forEach(id => delete vehCardEls[id]);
     return;
   }
-  wrap.innerHTML = '';
+  if (wrap.querySelector('.no-data')) wrap.innerHTML = '';
+
+  // buang card unit yang udah gak ada lagi di data terbaru
+  const currentIds = new Set(list.map(a => a.armada_id));
+  Object.keys(vehCardEls).forEach(id => {
+    if (!currentIds.has(id)) {
+      vehCardEls[id].el.remove();
+      delete vehCardEls[id];
+    }
+  });
+
   list.forEach(a => {
-    const fresh = getFreshness(a.last_update); // 'online' | 'warning' | 'offline'
+    let entry = vehCardEls[a.armada_id];
+    if (!entry) {
+      const card = document.createElement('div');
+      card.className = 'veh-card';
+      card.innerHTML =
+        '<div class="veh-card-top">' +
+          '<div class="veh-card-id"><span class="online-dot"></span><span class="veh-id-text"></span></div>' +
+          '<span class="veh-zone-slot"></span>' +
+        '</div>' +
+        '<div class="veh-meta-slot" style="font-size:11px; color:var(--text-dim);"></div>' +
+        '<div class="veh-card-meta"><span><i class="bi bi-clock-history"></i> <span class="veh-time-text"></span></span>' +
+          '<span class="veh-speed-slot"></span></div>';
+      card.addEventListener('click', () => focusArmada(a.armada_id));
+      wrap.appendChild(card);
+      entry = {
+        el: card,
+        dotEl: card.querySelector('.online-dot'),
+        idEl: card.querySelector('.veh-id-text'),
+        zoneEl: card.querySelector('.veh-zone-slot'),
+        metaEl: card.querySelector('.veh-meta-slot'),
+        timeTextEl: card.querySelector('.veh-time-text'),
+        speedEl: card.querySelector('.veh-speed-slot'),
+        lastSig: ''
+      };
+      entry.idEl.textContent = a.armada_id;
+      vehCardEls[a.armada_id] = entry;
+    }
+
+    entry.el.classList.toggle('selected', a.armada_id === selectedArmadaId);
+
+    const fresh = getFreshness(a.last_update);
     const zoneLabel = a.last_zone_id
       ? '<span class="badge-zone in-zone">' + a.last_zone_id + '</span>'
       : '<span class="badge-zone out-zone">luar zona</span>';
-    const card = document.createElement('div');
-    card.className = 'veh-card' + (a.armada_id === selectedArmadaId ? ' selected' : '');
-    card.innerHTML =
-      '<div class="veh-card-top">' +
-        '<div class="veh-card-id"><span class="online-dot ' + fresh + '" title="' + fresh + '"></span>' + a.armada_id + '</div>' +
-        zoneLabel +
-      '</div>' +
-      '<div style="font-size:11px; color:var(--text-dim);">' + (a.group_nama || 'Belum di-assign') + ' &middot; ' + (a.status_operasional || 'Aktif') + '</div>' +
-      '<div class="veh-card-meta"><span><i class="bi bi-clock-history"></i> ' + timeAgo(a.last_update) + '</span>' +
-      (a.last_speed ? '<span>' + Math.round(a.last_speed) + ' km/j</span>' : '<span>diam</span>') + '</div>';
-    card.addEventListener('click', () => focusArmada(a.armada_id));
-    wrap.appendChild(card);
+    const metaText = (a.group_nama || 'Belum di-assign') + ' &middot; ' + (a.status_operasional || 'Aktif');
+    const speedText = a.last_speed ? Math.round(a.last_speed) + ' km/j' : 'diam';
+
+    // signature buat skip nulis ulang DOM kalau memang gak ada yang berubah (selain waktu-relatif)
+    const sig = fresh + '|' + zoneLabel + '|' + metaText + '|' + speedText;
+    if (entry.lastSig !== sig) {
+      entry.dotEl.className = 'online-dot ' + fresh;
+      entry.dotEl.title = fresh;
+      entry.zoneEl.innerHTML = zoneLabel;
+      entry.metaEl.innerHTML = metaText;
+      entry.speedEl.textContent = speedText;
+      entry.lastSig = sig;
+    }
+    // "X detik/menit lalu" berubah tiap detik -- ini update murah (textContent), aman tiap siklus
+    entry.timeTextEl.textContent = timeAgo(a.last_update);
   });
 }
 
-async function loadArmada() {
-  const res = await fetch('/api/armada');
+const markerSig = {}; // armada_id -> signature (status+freshness) buat skip setIcon kalau gak ada perubahan
+
+async function loadArmada(signal) {
+  const res = await fetch('/api/armada', { signal, cache: 'no-store' });
   const list = await res.json();
   lastArmadaData = list;
 
   list.forEach(a => {
     if (a.last_lat && a.last_lon) {
       const pos = [a.last_lat, a.last_lon];
-      const popupHtml = buildPopupHtml(a);
-      const icon = buildMarkerIcon(a);
-      if (markers[a.armada_id]) {
-        markers[a.armada_id].setLatLng(pos);
-        markers[a.armada_id].setPopupContent(popupHtml);
-        markers[a.armada_id].setIcon(icon);
-      } else {
-        const marker = L.marker(pos, { icon }).bindPopup(popupHtml, { maxWidth: 260, minWidth: 200 });
+      let marker = markers[a.armada_id];
+      const sig = (a.status_operasional || '') + '|' + getFreshness(a.last_update);
+
+      if (!marker) {
+        const icon = buildMarkerIcon(a);
+        marker = L.marker(pos, { icon }).bindPopup(buildPopupHtml(a), { maxWidth: 260, minWidth: 200 });
         marker.on('click', () => toggleTrail(a.armada_id));
+        // popup di-refresh isinya tiap kali dibuka, biar selalu nampilin data paling baru
+        marker.on('popupopen', () => {
+          const cur = lastArmadaData.find(x => x.armada_id === a.armada_id);
+          if (cur) marker.setPopupContent(buildPopupHtml(cur));
+        });
         clusterGroup.addLayer(marker);
         markers[a.armada_id] = marker;
+        markerSig[a.armada_id] = sig;
+      } else {
+        // posisi SELALU diupdate tiap siklus -- ini inti dari tracking real-time (reuse marker, gak bikin ulang)
+        marker.setLatLng(pos);
+
+        // icon cuma di-rebuild kalau status operasional / status online-nya berubah, bukan tiap detik
+        if (markerSig[a.armada_id] !== sig) {
+          marker.setIcon(buildMarkerIcon(a));
+          markerSig[a.armada_id] = sig;
+        }
+
+        // popup cuma diupdate isinya kalau LAGI DIBUKA -- percuma nyiapin HTML popup
+        // buat marker yang gak lagi dilihat user, itung-itung hemat kerja tiap detik
+        if (marker.isPopupOpen()) {
+          marker.setPopupContent(buildPopupHtml(a));
+        }
       }
     }
   });
+
+  // update satu kali per siklus (bukan per-marker) supaya cluster ke-refresh sesuai posisi baru
+  if (typeof clusterGroup.refreshClusters === 'function') clusterGroup.refreshClusters();
 
   renderStats(list);
   renderVehicleList(list);
 }
 
-async function loadEvents() {
-  const res = await fetch('/api/events');
+let lastEventSig = '';
+let eventTimeEls = []; // {el, waktu} -- biar teks "X lalu" bisa di-refresh tanpa rebuild total
+
+async function loadEvents(signal) {
+  const res = await fetch('/api/events', { signal, cache: 'no-store' });
   const list = await res.json();
   const wrap = document.getElementById('eventListWrap');
-  if (!list.length) {
-    wrap.innerHTML = '<div class="no-data">Belum ada event geofence.</div>';
-    return;
+
+  // signature ringan dari isi list -- kalau event log emang gak berubah (paling sering,
+  // soalnya event cuma nambah pas armada masuk/keluar zona), gak usah rebuild DOM tiap detik
+  const sig = list.map(e => e.armada_id + '|' + e.jenis_event + '|' + e.waktu).join(';');
+
+  if (sig !== lastEventSig) {
+    lastEventSig = sig;
+    eventTimeEls = [];
+    if (!list.length) {
+      wrap.innerHTML = '<div class="no-data">Belum ada event geofence.</div>';
+      return;
+    }
+    wrap.innerHTML = '';
+    list.forEach(e => {
+      const row = document.createElement('div');
+      row.className = 'event-row';
+      const timeEl = document.createElement('div');
+      timeEl.className = 'ev-time';
+      timeEl.textContent = timeAgo(e.waktu);
+      row.innerHTML = '<div class="ev-armada">' + e.armada_id + ' &middot; ' + e.jenis_event + ' ' + e.nama_zona + '</div>';
+      row.appendChild(timeEl);
+      wrap.appendChild(row);
+      eventTimeEls.push({ el: timeEl, waktu: e.waktu });
+    });
+  } else {
+    // list-nya sama persis -- cukup refresh teks waktu-relatifnya aja, murah dan tetap real-time
+    eventTimeEls.forEach(o => { o.el.textContent = timeAgo(o.waktu); });
   }
-  wrap.innerHTML = '';
-  list.forEach(e => {
-    const row = document.createElement('div');
-    row.className = 'event-row';
-    row.innerHTML = '<div class="ev-armada">' + e.armada_id + ' &middot; ' + e.jenis_event + ' ' + e.nama_zona + '</div>' +
-      '<div class="ev-time">' + timeAgo(e.waktu) + '</div>';
-    wrap.appendChild(row);
-  });
 }
 
-function refreshAll() {
-  loadArmada();
-  loadEvents();
-  document.getElementById('lastRefresh').textContent = 'Update terakhir: ' + new Date().toLocaleTimeString('id-ID');
+// Interval polling -- SEBELUMNYA 5000ms, sekarang ~1000ms biar mendekati real-time
+// (device GPS ngirim tiap 1 detik, jadi UI juga nyoba ngejar secepat itu).
+const POLL_INTERVAL_MS = 1000;
+let isRefreshing = false; // flag guard: cegah request numpuk kalau siklus sebelumnya belum kelar
+
+async function refreshAll() {
+  if (isRefreshing) return; // siklus sebelumnya masih jalan (misal koneksi lagi lambat) -- skip, jangan numpuk
+  isRefreshing = true;
+
+  const controller = new AbortController();
+  // jaga-jaga request nge-hang (server lemot/koneksi putus) -- paksa batalin biar isRefreshing gak nyangkut true selamanya
+  const watchdog = setTimeout(() => controller.abort(), 8000);
+
+  try {
+    await Promise.all([
+      loadArmada(controller.signal),
+      loadEvents(controller.signal)
+    ]);
+    document.getElementById('lastRefresh').textContent = 'Update terakhir: ' + new Date().toLocaleTimeString('id-ID');
+  } catch (err) {
+    if (err.name !== 'AbortError') console.error('Refresh gagal:', err);
+  } finally {
+    clearTimeout(watchdog);
+    isRefreshing = false;
+  }
 }
 
 // ---------- Tabs (Armada / Riwayat Event) ----------
@@ -2585,7 +2697,18 @@ vehSidebarHandle.addEventListener('touchend', () => { drawerTouchStartY = null; 
 
 loadZones();
 refreshAll();
-setInterval(refreshAll, 5000);
+let pollTimer = setInterval(refreshAll, POLL_INTERVAL_MS);
+
+// Pas tab disembunyiin (mis. pindah app di HP), hentiin polling sementara biar gak boros
+// baterai/kuota/koneksi server -- lanjut lagi otomatis begitu tab aktif lagi.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    clearInterval(pollTimer);
+  } else {
+    refreshAll();
+    pollTimer = setInterval(refreshAll, POLL_INTERVAL_MS);
+  }
+});
 </script>
 </body>
 </html>"""
