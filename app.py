@@ -3,7 +3,8 @@ import sqlite3
 import math
 import secrets
 import json
-from datetime import datetime, timedelta
+import logging
+from datetime import datetime, timedelta, timezone
 from flask import Flask, request, jsonify, g, redirect, url_for, render_template_string, flash
 from flask_cors import CORS
 from flask_login import (
@@ -15,6 +16,12 @@ from werkzeug.security import generate_password_hash, check_password_hash
 app = Flask(__name__)
 CORS(app)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-ganti-ini-pas-production")
+
+# ---------- [DIAGNOSTIK SEMENTARA] ----------
+# Cuma buat instrumentasi investigasi delay GPS -- gak mengubah behavior apapun.
+# Aman dihapus kapan aja setelah investigasi selesai (lihat blok GPS-DIAG di /api/track).
+app.logger.setLevel(logging.INFO)
+# ---------- AKHIR [DIAGNOSTIK SEMENTARA] ----------
 
 login_manager = LoginManager(app)
 login_manager.login_view = "login"
@@ -572,8 +579,43 @@ def users_delete(user_id):
     flash(f"User '{target['username']}' berhasil dihapus.")
     return redirect(url_for("users_page"))
 
+# ========================================================================
+# [DIAGNOSTIK SEMENTARA] -- investigasi delay real-time GPS tracking.
+# Blok ini CUMA buat ngukur & logging, gak nyentuh logic bisnis apapun.
+# Aman dihapus kapan aja setelah investigasi kelar (cari komentar "GPS-DIAG").
+# ========================================================================
+_diag_last_upload_ts = {}  # armada_id -> datetime UTC saat request terakhir diterima server (in-memory, per-proses)
+
+
+def _diag_parse_device_time(waktu_str):
+    """Coba parse string 'time' yang dikirim device jadi datetime UTC naive.
+    Return None kalau formatnya gak dikenali -- dipakai CUMA buat logging diagnostik,
+    kalau gagal parse gak akan pernah melempar error ke request utama."""
+    if not waktu_str:
+        return None
+    s = waktu_str.strip()
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
+    except Exception:
+        pass
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"):
+        try:
+            return datetime.strptime(s, fmt)
+        except Exception:
+            continue
+    return None
+# ========================================================================
+# [AKHIR BLOK DIAGNOSTIK -- helper di atas]
+# ========================================================================
+
+
 @app.route("/api/track", methods=["GET", "POST"])
 def track():
+    _diag_server_receive_utc = datetime.utcnow()  # [GPS-DIAG] timestamp paling awal, sebelum apapun diproses
+
     armada_id = request.values.get("armada_id", "").strip()
     lat = request.values.get("lat", type=float)
     lon = request.values.get("lon", type=float)
@@ -585,6 +627,38 @@ def track():
 
     if not waktu:
         waktu = datetime.utcnow().isoformat()
+
+    # ---------- [GPS-DIAG] logging diagnostik, dibungkus try/except biar gak PERNAH ganggu request asli ----------
+    try:
+        _diag_server_receive_local = datetime.now()
+        _diag_device_time = _diag_parse_device_time(waktu)
+
+        if _diag_device_time is not None:
+            _diag_server_minus_device = (_diag_server_receive_utc - _diag_device_time).total_seconds()
+            _diag_server_minus_device_str = f"{_diag_server_minus_device:.3f}s"
+        else:
+            _diag_server_minus_device_str = "N/A (format waktu device gak bisa di-parse: %r)" % waktu
+
+        _diag_prev_ts = _diag_last_upload_ts.get(armada_id)
+        if _diag_prev_ts is not None:
+            _diag_gap_str = f"{(_diag_server_receive_utc - _diag_prev_ts).total_seconds():.3f}s"
+        else:
+            _diag_gap_str = "N/A (upload pertama dari unit ini sejak server start)"
+        _diag_last_upload_ts[armada_id] = _diag_server_receive_utc
+
+        app.logger.info(
+            "[GPS-DIAG] armada_id=%s lat=%s lon=%s | server_utc=%s server_local=%s "
+            "device_time_raw=%r | server_minus_device=%s | gap_from_prev_upload=%s",
+            armada_id, lat, lon,
+            _diag_server_receive_utc.isoformat(timespec="milliseconds"),
+            _diag_server_receive_local.isoformat(timespec="milliseconds"),
+            waktu,
+            _diag_server_minus_device_str,
+            _diag_gap_str,
+        )
+    except Exception as _diag_err:
+        app.logger.warning("[GPS-DIAG] logging diagnostik gagal (diabaikan, gak pengaruh ke request): %s", _diag_err)
+    # ---------- [AKHIR GPS-DIAG] ----------
 
     db = get_db()
 
