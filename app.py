@@ -1947,6 +1947,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .map-ctrl-btn:hover { background: var(--bg-panel-2); }
   .map-ctrl-btn.toggled-off { color: var(--text-dim); opacity: 0.55; }
 
+  /* ---------- Panah marker armada (rotasi mulus lewat CSS transition) ---------- */
+  .veh-arrow-wrap {
+    width: 22px; height: 22px;
+    transition: transform 0.5s ease;
+    transform-origin: 50% 50%;
+    will-change: transform;
+  }
+
   /* ---------- Marker cluster theming (biar nyatu sama dark theme) ---------- */
   .marker-cluster-small, .marker-cluster-medium, .marker-cluster-large {
     background-color: rgba(255,106,26,0.25);
@@ -2272,6 +2280,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="map-ctrl-btn" id="fitAllBtn" title="Fit semua armada">
         <i class="bi bi-fullscreen"></i>
       </div>
+      <div class="map-ctrl-btn" id="clearTrailBtn" title="Hapus semua jejak rute yang lagi ditampilkan (gak menghapus data)">
+        <i class="bi bi-eraser"></i>
+      </div>
     </div>
 
     <button class="fab-vehlist" id="fabVehList" title="Daftar armada">
@@ -2373,18 +2384,77 @@ function getStatusColor(status) {
   }[status] || '#6BB689';
 }
 
-function buildMarkerIcon(a) {
+function buildMarkerIcon(a, headingDeg) {
   const color = getStatusColor(a.status_operasional);
   const fresh = getFreshness(a.last_update);
   const opacity = fresh === 'offline' ? 0.5 : 1;
+  const heading = (typeof headingDeg === 'number') ? headingDeg : 0;
+  // Panah SVG nunjuk ke atas (0deg = utara) secara default, diputer lewat CSS transform.
+  // Dibungkus div terpisah (.veh-arrow-wrap) biar rotasinya bisa dimanipulasi langsung
+  // lewat DOM (marker.getElement()) tanpa perlu rebuild divIcon tiap siklus refresh.
   return L.divIcon({
     className: 'veh-marker-icon',
-    html: '<div style="width:18px; height:18px; border-radius:50%; background:' + color +
-      '; border:2px solid #1C1A17; box-shadow:0 0 0 1px ' + color + '; opacity:' + opacity + ';"></div>',
-    iconSize: [18, 18],
-    iconAnchor: [9, 9],
-    popupAnchor: [0, -9]
+    html:
+      '<div class="veh-arrow-wrap" style="transform: rotate(' + heading + 'deg); opacity:' + opacity + ';">' +
+        '<svg width="22" height="22" viewBox="0 0 24 24">' +
+          '<path d="M12 1.5 L20.5 21 L12 16.2 L3.5 21 Z" fill="' + color + '" stroke="#1C1A17" stroke-width="1.4" stroke-linejoin="round"/>' +
+        '</svg>' +
+      '</div>',
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+    popupAnchor: [0, -11]
   });
+}
+
+// ---------- Perhitungan arah/heading dari 2 koordinat berurutan ----------
+const markerLastPos = {};   // armada_id -> {lat, lon} posisi sebelumnya, buat hitung bearing
+const markerHeading = {};   // armada_id -> sudut heading yang lagi ditampilkan ("unwrapped", bisa >360 buat animasi rotasi terpendek)
+const MIN_HEADING_DISTANCE_M = 3; // gerakan di bawah ini dianggap noise GPS (armada diam/parkir) -- heading lama dipertahankan
+
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
+}
+
+function computeBearing(lat1, lon1, lat2, lon2) {
+  const toRad = d => d * Math.PI / 180;
+  const toDeg = r => r * 180 / Math.PI;
+  const dLon = toRad(lon2 - lon1);
+  const y = Math.sin(dLon) * Math.cos(toRad(lat2));
+  const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+            Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon);
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+// Pilih arah rotasi terpendek (maks +-180deg) biar transisi CSS gak muter muter kejauhan
+// pas heading lompat dari misal 350deg ke 10deg.
+function shortestRotation(fromAngle, toAngleRaw) {
+  const toAngle = ((toAngleRaw % 360) + 360) % 360;
+  let diff = toAngle - (fromAngle % 360);
+  if (diff > 180) diff -= 360;
+  if (diff < -180) diff += 360;
+  return fromAngle + diff;
+}
+
+// Update heading utk satu armada berdasarkan posisi baru. Return heading yang harus dipakai render.
+function updateHeading(armadaId, lat, lon) {
+  const prevPos = markerLastPos[armadaId];
+  if (prevPos) {
+    const distMoved = haversineMeters(prevPos.lat, prevPos.lon, lat, lon);
+    if (distMoved >= MIN_HEADING_DISTANCE_M) {
+      const bearing = computeBearing(prevPos.lat, prevPos.lon, lat, lon);
+      const prevHeading = markerHeading[armadaId] || 0;
+      markerHeading[armadaId] = shortestRotation(prevHeading, bearing);
+    }
+    // kalau gerakannya kecil (di bawah threshold), heading LAMA dipertahankan --
+    // biar panah gak "gemeteran" muter-muter pas armada diam/GPS noise pas parkir
+  }
+  markerLastPos[armadaId] = { lat, lon };
+  return markerHeading[armadaId] || 0;
 }
 
 // ---------- Trail toggle ----------
@@ -2405,6 +2475,14 @@ async function toggleTrail(armadaId) {
   const line = L.polyline(latlngs, { color: '#FF6A1A', weight: 3, opacity: 0.7 }).addTo(map);
   trailLines[armadaId] = line;
   map.fitBounds(line.getBounds(), { maxZoom: 14 });
+}
+
+// ---------- Hapus semua jejak rute yang lagi ditampilkan (cuma layer di peta, DATA di server gak kesentuh) ----------
+function clearAllTrails() {
+  Object.keys(trailLines).forEach(id => {
+    map.removeLayer(trailLines[id]);
+    delete trailLines[id];
+  });
 }
 
 function focusArmada(armadaId) {
@@ -2559,9 +2637,10 @@ async function loadArmada(signal) {
       const pos = [a.last_lat, a.last_lon];
       let marker = markers[a.armada_id];
       const sig = (a.status_operasional || '') + '|' + getFreshness(a.last_update);
+      const heading = updateHeading(a.armada_id, a.last_lat, a.last_lon); // panah nunjuk arah gerak
 
       if (!marker) {
-        const icon = buildMarkerIcon(a);
+        const icon = buildMarkerIcon(a, heading);
         marker = L.marker(pos, { icon }).bindPopup(buildPopupHtml(a), { maxWidth: 260, minWidth: 200 });
         marker.on('click', () => toggleTrail(a.armada_id));
         // popup di-refresh isinya tiap kali dibuka, biar selalu nampilin data paling baru
@@ -2576,10 +2655,16 @@ async function loadArmada(signal) {
         // posisi SELALU diupdate tiap siklus -- ini inti dari tracking real-time (reuse marker, gak bikin ulang)
         marker.setLatLng(pos);
 
-        // icon cuma di-rebuild kalau status operasional / status online-nya berubah, bukan tiap detik
+        // icon (warna status) cuma di-rebuild kalau status operasional / status online-nya berubah, bukan tiap detik
         if (markerSig[a.armada_id] !== sig) {
-          marker.setIcon(buildMarkerIcon(a));
+          marker.setIcon(buildMarkerIcon(a, heading));
           markerSig[a.armada_id] = sig;
+        } else {
+          // status gak berubah -- cukup putar panahnya langsung lewat DOM (murah, CSS transition
+          // yang bikin animasinya mulus), gak perlu rebuild divIcon tiap siklus cuma buat rotasi
+          const el = marker.getElement();
+          const arrowEl = el && el.querySelector('.veh-arrow-wrap');
+          if (arrowEl) arrowEl.style.transform = 'rotate(' + heading + 'deg)';
         }
 
         // popup cuma diupdate isinya kalau LAGI DIBUKA -- percuma nyiapin HTML popup
@@ -2709,6 +2794,9 @@ document.getElementById('fitAllBtn').addEventListener('click', () => {
   const bounds = L.latLngBounds(withPos.map(a => [a.last_lat, a.last_lon]));
   map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
 });
+
+// ---------- Hapus semua jejak rute yang lagi ditampilkan (cuma tampilan, data server aman) ----------
+document.getElementById('clearTrailBtn').addEventListener('click', clearAllTrails);
 
 // ---------- Kunci scroll body kalau salah satu drawer (armada/nav) lagi kebuka ----------
 const sidebarEl = document.querySelector('.sidebar');
