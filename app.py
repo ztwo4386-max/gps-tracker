@@ -2457,6 +2457,70 @@ function updateHeading(armadaId, lat, lon) {
   return markerHeading[armadaId] || 0;
 }
 
+// ========================================================================
+// Validasi data GPS buat live map (Phase 2). Ini SENGAJA cuma mempengaruhi
+// pergerakan marker di peta -- data mentah dari /api/history tetap utuh,
+// gak difilter sama sekali, jadi histori/trail tetap akurat 100%.
+// ========================================================================
+const lastRenderedTs = {};       // armada_id -> Date, waktu titik TERAKHIR yang beneran dipakai gerakin marker
+const consecutiveRejects = {};   // armada_id -> jumlah penolakan beruntun (buat auto-resync kalau "lompatan"-nya ternyata beneran)
+
+const MAX_PLAUSIBLE_SPEED_KMH = 180;        // batas atas kecepatan wajar (longgar sengaja, jangan sampe nolak laju sah)
+const MIN_ELAPSED_FOR_SPEED_CHECK_S = 0.5;  // di bawah ini speed gak reliable dihitung (potensi div-by-near-zero) -- skip cek kecepatan
+const MAX_CONSECUTIVE_REJECTS = 5;          // nolak 5x beruntun -> anggap perpindahannya BENERAN, bukan noise -- paksa terima & resync
+
+// Return true kalau titik ini BOLEH dipakai gerakin marker di peta.
+function validateIncomingPoint(armadaId, newLat, newLon, newTs) {
+  const prevTs = lastRenderedTs[armadaId];
+  const prevPos = markerLastPos[armadaId];
+
+  // Titik pertama buat armada ini -- gak ada pembanding, otomatis diterima
+  if (!prevTs || !prevPos) {
+    consecutiveRejects[armadaId] = 0;
+    return true;
+  }
+
+  // Waktu device gak bisa di-parse -- gagal aman (terima), soalnya kita gak bisa ngecek
+  // urutan/kecepatan dengan aman tanpa timestamp yang valid.
+  if (!newTs) {
+    consecutiveRejects[armadaId] = 0;
+    return true;
+  }
+
+  // ---------- Filter 1: tolak paket yang lebih tua dari posisi yang udah dirender ----------
+  if (newTs.getTime() < prevTs.getTime()) {
+    return _diagRejectPoint(armadaId);
+  }
+
+  // ---------- Filter 2: tolak lompatan yang gak masuk akal (jarak vs waktu vs kecepatan) ----------
+  const elapsedSeconds = (newTs.getTime() - prevTs.getTime()) / 1000;
+  if (elapsedSeconds >= MIN_ELAPSED_FOR_SPEED_CHECK_S) {
+    const distance = haversineMeters(prevPos.lat, prevPos.lon, newLat, newLon);
+    const impliedSpeedKmh = (distance / elapsedSeconds) * 3.6;
+    if (impliedSpeedKmh > MAX_PLAUSIBLE_SPEED_KMH) {
+      return _diagRejectPoint(armadaId);
+    }
+  }
+
+  consecutiveRejects[armadaId] = 0;
+  return true;
+}
+
+function _diagRejectPoint(armadaId) {
+  const rejects = (consecutiveRejects[armadaId] || 0) + 1;
+  consecutiveRejects[armadaId] = rejects;
+  if (rejects > MAX_CONSECUTIVE_REJECTS) {
+    // Nolak mulu berturut-turut -- kemungkinan besar BUKAN noise, armadanya beneran udah pindah jauh
+    // (mis. abis di-towing, atau device baru nyala lagi setelah lama mati). Resync: terima titik ini.
+    consecutiveRejects[armadaId] = 0;
+    return true;
+  }
+  return false;
+}
+// ========================================================================
+// [AKHIR validasi GPS Phase 2]
+// ========================================================================
+
 // ---------- Trail toggle ----------
 async function toggleTrail(armadaId) {
   if (trailLines[armadaId]) {
@@ -2637,9 +2701,12 @@ async function loadArmada(signal) {
       const pos = [a.last_lat, a.last_lon];
       let marker = markers[a.armada_id];
       const sig = (a.status_operasional || '') + '|' + getFreshness(a.last_update);
-      const heading = updateHeading(a.armada_id, a.last_lat, a.last_lon); // panah nunjuk arah gerak
+      const incomingTs = parseWaktu(a.last_update);
 
       if (!marker) {
+        // titik pertama buat armada ini -- gak ada history buat dibandingin, otomatis diterima
+        const heading = updateHeading(a.armada_id, a.last_lat, a.last_lon);
+        lastRenderedTs[a.armada_id] = incomingTs || new Date();
         const icon = buildMarkerIcon(a, heading);
         marker = L.marker(pos, { icon }).bindPopup(buildPopupHtml(a), { maxWidth: 260, minWidth: 200 });
         marker.on('click', () => toggleTrail(a.armada_id));
@@ -2652,16 +2719,26 @@ async function loadArmada(signal) {
         markers[a.armada_id] = marker;
         markerSig[a.armada_id] = sig;
       } else {
-        // posisi SELALU diupdate tiap siklus -- ini inti dari tracking real-time (reuse marker, gak bikin ulang)
-        marker.setLatLng(pos);
+        // Phase 2: cek dulu apakah titik ini layak dipakai gerakin marker (bukan out-of-order,
+        // bukan lompatan gak masuk akal). Kalau ditolak, marker TETAP di posisi lama -- gak
+        // pernah gerak mundur. Ini cuma mempengaruhi live map, /api/history tetap apa adanya.
+        const accepted = validateIncomingPoint(a.armada_id, a.last_lat, a.last_lon, incomingTs);
+        let heading = markerHeading[a.armada_id] || 0; // default: pertahankan heading sekarang kalau ditolak
 
-        // icon (warna status) cuma di-rebuild kalau status operasional / status online-nya berubah, bukan tiap detik
+        if (accepted) {
+          heading = updateHeading(a.armada_id, a.last_lat, a.last_lon); // panah nunjuk arah gerak
+          marker.setLatLng(pos); // posisi diupdate cuma kalau titiknya lolos validasi
+          lastRenderedTs[a.armada_id] = incomingTs || lastRenderedTs[a.armada_id] || new Date();
+        }
+
+        // Warna/status marker independen dari validitas posisi (mis. admin ubah status manual
+        // gak ada hubungannya sama urutan/akurasi GPS) -- ini tetap boleh update walau posisi ditolak.
         if (markerSig[a.armada_id] !== sig) {
           marker.setIcon(buildMarkerIcon(a, heading));
           markerSig[a.armada_id] = sig;
-        } else {
-          // status gak berubah -- cukup putar panahnya langsung lewat DOM (murah, CSS transition
-          // yang bikin animasinya mulus), gak perlu rebuild divIcon tiap siklus cuma buat rotasi
+        } else if (accepted) {
+          // status gak berubah & posisi diterima -- cukup putar panahnya langsung lewat DOM (murah,
+          // CSS transition yang bikin animasinya mulus), gak perlu rebuild divIcon tiap siklus
           const el = marker.getElement();
           const arrowEl = el && el.querySelector('.veh-arrow-wrap');
           if (arrowEl) arrowEl.style.transform = 'rotate(' + heading + 'deg)';
