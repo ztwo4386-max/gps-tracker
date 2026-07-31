@@ -2522,12 +2522,18 @@ function _diagRejectPoint(armadaId) {
 // ========================================================================
 
 // ---------- Trail toggle ----------
+// trailsEnabled = status "izin nampilin trail" buat SESI dashboard ini (reset ke true tiap reload halaman).
+// Ini murni state di memori JS -- gak pernah nyentuh /api/history atau database sama sekali.
+let trailsEnabled = true;
+
 async function toggleTrail(armadaId) {
   if (trailLines[armadaId]) {
+    // trail lagi tampil -- klik buat nyembunyiin, ini SELALU boleh gak peduli status trailsEnabled
     map.removeLayer(trailLines[armadaId]);
     delete trailLines[armadaId];
     return;
   }
+  if (!trailsEnabled) return; // trail lagi dimatikan sesi ini -- klik marker gak bakal nampilin trail baru sampai "Show Trail" diaktifin lagi
   // Ambil histori posisi (sistem menyimpan sampai 200 titik terakhir, kurang lebih 1-2 hari tergantung interval kirim)
   const res = await fetch('/api/history/' + armadaId, { cache: 'no-store' });
   const points = await res.json();
@@ -2542,11 +2548,36 @@ async function toggleTrail(armadaId) {
 }
 
 // ---------- Hapus semua jejak rute yang lagi ditampilkan (cuma layer di peta, DATA di server gak kesentuh) ----------
+// Ini juga MATIIN kemampuan nampilin trail baru sampai user eksplisit nyalain lagi lewat tombol
+// yang sama (jadi "Show Trail") -- biar gak ada trail yang "otomatis muncul lagi" tanpa diminta.
 function clearAllTrails() {
+  trailsEnabled = false;
   Object.keys(trailLines).forEach(id => {
     map.removeLayer(trailLines[id]);
     delete trailLines[id];
   });
+  syncTrailButtonUI();
+}
+
+// "Show Trail" -- cuma nyalain lagi KEMAMPUAN nampilin trail. SENGAJA gak otomatis
+// nggambar ulang trail manapun -- user tetep harus klik marker buat nampilin trail spesifik.
+function enableTrails() {
+  trailsEnabled = true;
+  syncTrailButtonUI();
+}
+
+function syncTrailButtonUI() {
+  const btn = document.getElementById('clearTrailBtn');
+  const icon = btn.querySelector('i');
+  if (trailsEnabled) {
+    btn.classList.remove('toggled-off');
+    btn.title = 'Hapus semua jejak rute yang lagi ditampilkan (gak menghapus data)';
+    icon.className = 'bi bi-eraser';
+  } else {
+    btn.classList.add('toggled-off');
+    btn.title = 'Trail lagi dimatikan sesi ini -- klik buat nyalain lagi (Show Trail)';
+    icon.className = 'bi bi-eye-slash';
+  }
 }
 
 function focusArmada(armadaId) {
@@ -2802,6 +2833,14 @@ async function loadEvents(signal) {
 const POLL_INTERVAL_MS = 1000;
 let isRefreshing = false; // flag guard: cegah request numpuk kalau siklus sebelumnya belum kelar
 
+// ---------- Jaring pengaman: pastikan layer geofence selalu nempel di peta kalau memang harus tampil ----------
+// (map.hasLayer() itu O(1), jadi ini praktis gak nambah beban apa-apa tiap siklus)
+function ensureGeofenceLayerIntact() {
+  if (geofenceVisible && !map.hasLayer(zoneLayerGroup)) {
+    map.addLayer(zoneLayerGroup);
+  }
+}
+
 async function refreshAll() {
   if (isRefreshing) return; // siklus sebelumnya masih jalan (misal koneksi lagi lambat) -- skip, jangan numpuk
   isRefreshing = true;
@@ -2815,6 +2854,7 @@ async function refreshAll() {
       loadArmada(controller.signal),
       loadEvents(controller.signal)
     ]);
+    ensureGeofenceLayerIntact();
     document.getElementById('lastRefresh').textContent = 'Update terakhir: ' + new Date().toLocaleTimeString('id-ID');
   } catch (err) {
     if (err.name !== 'AbortError') console.error('Refresh gagal:', err);
@@ -2872,8 +2912,14 @@ document.getElementById('fitAllBtn').addEventListener('click', () => {
   map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
 });
 
-// ---------- Hapus semua jejak rute yang lagi ditampilkan (cuma tampilan, data server aman) ----------
-document.getElementById('clearTrailBtn').addEventListener('click', clearAllTrails);
+// ---------- Hapus/nyalain lagi semua jejak rute (toggle Clear Trail / Show Trail, cuma tampilan, data server aman) ----------
+document.getElementById('clearTrailBtn').addEventListener('click', () => {
+  if (trailsEnabled) {
+    clearAllTrails();
+  } else {
+    enableTrails();
+  }
+});
 
 // ---------- Kunci scroll body kalau salah satu drawer (armada/nav) lagi kebuka ----------
 const sidebarEl = document.querySelector('.sidebar');
