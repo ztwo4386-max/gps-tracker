@@ -2047,6 +2047,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .popup-row { font-size:12px; margin-top:2px; }
   .popup-row .lbl { color:#8A8276; }
   .leaflet-popup-content-wrapper { border-radius: 10px; max-width: 280px; }
+
+  /* ---------- Tombol aksi trail di dalam popup marker ---------- */
+  .popup-actions { display:flex; gap:6px; margin-top:8px; }
+  .popup-btn {
+    flex:1; display:flex; align-items:center; justify-content:center; gap:4px;
+    padding:6px 8px; font-size:11px; font-weight:600;
+    border-radius:6px; border:1px solid var(--border-c);
+    background:var(--bg-panel-2); color:var(--text-main); cursor:pointer;
+    white-space:nowrap;
+  }
+  .popup-btn:hover { background:#383430; }
+  .popup-btn:disabled, .popup-btn.popup-btn-disabled {
+    opacity:0.4; cursor:not-allowed;
+  }
+  .popup-btn:disabled:hover { background:var(--bg-panel-2); }
   .leaflet-popup-content { margin: 10px 12px; }
 
   /* ---------- Statistik horizontal untuk mobile (overlay tipis di atas peta) ---------- */
@@ -2521,19 +2536,12 @@ function _diagRejectPoint(armadaId) {
 // [AKHIR validasi GPS Phase 2]
 // ========================================================================
 
-// ---------- Trail toggle ----------
+// ---------- Trail per-armada (dipicu EKSPLISIT lewat tombol di popup -- BUKAN lagi otomatis pas klik marker) ----------
 // trailsEnabled = status "izin nampilin trail" buat SESI dashboard ini (reset ke true tiap reload halaman).
 // Ini murni state di memori JS -- gak pernah nyentuh /api/history atau database sama sekali.
 let trailsEnabled = true;
 
-async function toggleTrail(armadaId) {
-  if (trailLines[armadaId]) {
-    // trail lagi tampil -- klik buat nyembunyiin, ini SELALU boleh gak peduli status trailsEnabled
-    map.removeLayer(trailLines[armadaId]);
-    delete trailLines[armadaId];
-    return;
-  }
-  if (!trailsEnabled) return; // trail lagi dimatikan sesi ini -- klik marker gak bakal nampilin trail baru sampai "Show Trail" diaktifin lagi
+async function drawTrailForArmada(armadaId) {
   // Ambil histori posisi (sistem menyimpan sampai 200 titik terakhir, kurang lebih 1-2 hari tergantung interval kirim)
   const res = await fetch('/api/history/' + armadaId, { cache: 'no-store' });
   const points = await res.json();
@@ -2547,7 +2555,41 @@ async function toggleTrail(armadaId) {
   map.fitBounds(line.getBounds(), { maxZoom: 14 });
 }
 
-// ---------- Hapus semua jejak rute yang lagi ditampilkan (cuma layer di peta, DATA di server gak kesentuh) ----------
+// Popup yang lagi kebuka di-refresh isinya biar label tombol (Lihat/Sembunyikan, Hapus aktif/nonaktif)
+// langsung update seketika, gak perlu nunggu siklus polling 1 detik berikutnya.
+function refreshOpenPopupFor(armadaId) {
+  const marker = markers[armadaId];
+  const cur = lastArmadaData.find(x => x.armada_id === armadaId);
+  if (marker && cur && marker.isPopupOpen()) {
+    marker.setPopupContent(buildPopupHtml(cur));
+  }
+}
+
+// Tombol "Lihat Trail" / "Sembunyikan Trail" di popup. Klik ini eksplisit = niatnya udah jelas,
+// jadi SENGAJA nyalain lagi trailsEnabled kalau lagi dimatikan (biar gak ada klik yang "gak kejadian apa-apa").
+async function viewOrHideTrail(armadaId) {
+  if (trailLines[armadaId]) {
+    map.removeLayer(trailLines[armadaId]);
+    delete trailLines[armadaId];
+    refreshOpenPopupFor(armadaId);
+    return;
+  }
+  if (!trailsEnabled) enableTrails();
+  await drawTrailForArmada(armadaId);
+  refreshOpenPopupFor(armadaId);
+}
+
+// Tombol "Hapus Trail" di popup -- KHUSUS armada ini aja, gak nyentuh trail armada lain.
+// Selalu boleh dipanggil, tapi tombolnya sendiri di-disable di buildPopupHtml() kalau
+// memang gak ada trail buat dihapus, jadi gak ada klik yang bikin bingung "kejadian apa gak sih".
+function eraseTrailForArmada(armadaId) {
+  if (!trailLines[armadaId]) return;
+  map.removeLayer(trailLines[armadaId]);
+  delete trailLines[armadaId];
+  refreshOpenPopupFor(armadaId);
+}
+
+// ---------- Hapus SEMUA jejak rute sekaligus (tombol global di map-controls, cuma layer di peta, DATA di server gak kesentuh) ----------
 // Ini juga MATIIN kemampuan nampilin trail baru sampai user eksplisit nyalain lagi lewat tombol
 // yang sama (jadi "Show Trail") -- biar gak ada trail yang "otomatis muncul lagi" tanpa diminta.
 function clearAllTrails() {
@@ -2555,12 +2597,13 @@ function clearAllTrails() {
   Object.keys(trailLines).forEach(id => {
     map.removeLayer(trailLines[id]);
     delete trailLines[id];
+    refreshOpenPopupFor(id);
   });
   syncTrailButtonUI();
 }
 
 // "Show Trail" -- cuma nyalain lagi KEMAMPUAN nampilin trail. SENGAJA gak otomatis
-// nggambar ulang trail manapun -- user tetep harus klik marker buat nampilin trail spesifik.
+// nggambar ulang trail manapun -- user tetep harus klik "Lihat Trail" di popup buat armada spesifik.
 function enableTrails() {
   trailsEnabled = true;
   syncTrailButtonUI();
@@ -2608,7 +2651,21 @@ function buildPopupHtml(a) {
       html += '<div class="popup-row"><span class="lbl">ETA:</span> ' + a.eta.jarak_km + ' km &middot; ~' + jam + 'j ' + menit + 'm</div>';
     }
   }
-  html += '<div style="margin-top:6px; font-size:11px; color:#8A8276;">klik marker lagi untuk lihat/sembunyikan jejak rute</div>';
+
+  // Tombol trail per-armada -- label & status SELALU sesuai kondisi aktual saat ini,
+  // biar gak ada tombol yang "bohong" soal apa yang bakal terjadi kalau diklik.
+  const hasTrail = !!trailLines[a.armada_id];
+  html += '<div class="popup-actions">';
+  html += '<button type="button" class="popup-btn" onclick="viewOrHideTrail(\'' + a.armada_id + '\')">' +
+    '<i class="bi ' + (hasTrail ? 'bi-eye-slash' : 'bi-eye') + '"></i> ' + (hasTrail ? 'Sembunyikan' : 'Lihat') + ' Trail</button>';
+  if (hasTrail) {
+    html += '<button type="button" class="popup-btn" onclick="eraseTrailForArmada(\'' + a.armada_id + '\')">' +
+      '<i class="bi bi-trash"></i> Hapus Trail</button>';
+  } else {
+    html += '<button type="button" class="popup-btn popup-btn-disabled" disabled title="Belum ada trail yang ditampilkan buat unit ini">' +
+      '<i class="bi bi-trash"></i> Hapus Trail</button>';
+  }
+  html += '</div>';
   return html;
 }
 
@@ -2740,8 +2797,10 @@ async function loadArmada(signal) {
         lastRenderedTs[a.armada_id] = incomingTs || new Date();
         const icon = buildMarkerIcon(a, heading);
         marker = L.marker(pos, { icon }).bindPopup(buildPopupHtml(a), { maxWidth: 260, minWidth: 200 });
-        marker.on('click', () => toggleTrail(a.armada_id));
-        // popup di-refresh isinya tiap kali dibuka, biar selalu nampilin data paling baru
+        // Klik marker cuma buka popup (default Leaflet) -- kontrol trail sekarang eksplisit
+        // lewat tombol "Lihat/Sembunyikan Trail" & "Hapus Trail" di dalam popup, bukan lagi
+        // efek samping tersembunyi dari klik marker (biar gak ada yang ke-toggle gak sengaja).
+        // popup di-refresh isinya tiap kali dibuka, biar selalu nampilin data & tombol paling baru
         marker.on('popupopen', () => {
           const cur = lastArmadaData.find(x => x.armada_id === a.armada_id);
           if (cur) marker.setPopupContent(buildPopupHtml(cur));
