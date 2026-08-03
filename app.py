@@ -2656,10 +2656,10 @@ function buildPopupHtml(a) {
   // biar gak ada tombol yang "bohong" soal apa yang bakal terjadi kalau diklik.
   const hasTrail = !!trailLines[a.armada_id];
   html += '<div class="popup-actions">';
-  html += '<button type="button" class="popup-btn" onclick="viewOrHideTrail(\'' + a.armada_id + '\')">' +
+  html += '<button type="button" class="popup-btn" onclick="viewOrHideTrail(\\'' + a.armada_id + '\\')">' +
     '<i class="bi ' + (hasTrail ? 'bi-eye-slash' : 'bi-eye') + '"></i> ' + (hasTrail ? 'Sembunyikan' : 'Lihat') + ' Trail</button>';
   if (hasTrail) {
-    html += '<button type="button" class="popup-btn" onclick="eraseTrailForArmada(\'' + a.armada_id + '\')">' +
+    html += '<button type="button" class="popup-btn" onclick="eraseTrailForArmada(\\'' + a.armada_id + '\\')">' +
       '<i class="bi bi-trash"></i> Hapus Trail</button>';
   } else {
     html += '<button type="button" class="popup-btn popup-btn-disabled" disabled title="Belum ada trail yang ditampilkan buat unit ini">' +
